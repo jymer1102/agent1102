@@ -71,6 +71,13 @@
             z-index: 2;
         }
     </style>
+    <style>
+      /* same branded cursor as the main app (these pages open in their own tab) */
+      @media (any-pointer: fine) {
+        html, body, body * { cursor:url('/images/cursor/custom-j-cursor.png') 2 2, auto; }
+        a, a *, button, button * { cursor:url('/images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
+      }
+    </style>
 </head>
 <body id="t" class="offline">
 
