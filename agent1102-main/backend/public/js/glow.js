@@ -1,4 +1,4 @@
-// Visual effects: (1) a glow that follows the cursor inside cards,
+// Visual effects: (1) a glow that follows the cursor (or, on touch screens, your finger) inside cards,
 // (2) a soft blue glow that follows the typing caret in text boxes.
 (function () {
   "use strict";
@@ -22,6 +22,52 @@
       card.style.setProperty("--my", (lastEvt.clientY - r.top) + "px");
     });
   }, { passive: true });
+
+  // ---------- 1b. The same glow on touch screens: it follows your finger ----------
+  // A phone has no cursor and no hover, so the mouse code above skips touch on purpose. Instead, while a finger
+  // is down on a card, the glow sits under the finger and follows it, then fades when the finger lifts.
+  // Touch events (not pointer events) are used because they keep arriving while the browser scrolls the page,
+  // whereas pointermove stops the moment a scroll starts. The listeners are passive, so scrolling is never blocked.
+  const fingers = new Map();        // finger id -> { card, x, y }   (each finger is tracked on its own)
+  const fadeTimers = new WeakMap(); // one fade-out timer PER card, so touching another card can't cancel this one's fade
+  let touchRaf = 0;
+  function paintFingers() {
+    touchRaf = 0;
+    fingers.forEach((f) => {
+      const r = f.card.getBoundingClientRect(); // measured each frame: a bubble that scrolls with the finger stays under it
+      f.card.style.setProperty("--mx", (f.x - r.left) + "px");
+      f.card.style.setProperty("--my", (f.y - r.top) + "px");
+    });
+  }
+  document.addEventListener("touchstart", (e) => {
+    for (const t of e.changedTouches) {
+      const card = t.target && t.target.closest ? t.target.closest(CARD_SEL) : null;
+      if (!card) continue;
+      clearTimeout(fadeTimers.get(card)); // touched again before it finished fading: keep it on
+      fingers.set(t.identifier, { card, x: t.clientX, y: t.clientY });
+      card.setAttribute("data-touch-glow", "");
+    }
+    if (fingers.size) paintFingers();
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!fingers.size) return;
+    for (const t of e.changedTouches) { const f = fingers.get(t.identifier); if (f) { f.x = t.clientX; f.y = t.clientY; } }
+    if (!touchRaf) touchRaf = requestAnimationFrame(paintFingers);
+  }, { passive: true });
+  function liftFingers(e) {
+    for (const t of e.changedTouches) {
+      const f = fingers.get(t.identifier);
+      if (!f) continue;
+      fingers.delete(t.identifier);
+      const stillHeld = [...fingers.values()].some((o) => o.card === f.card); // another finger is still on this card
+      if (stillHeld) continue;
+      clearTimeout(fadeTimers.get(f.card));
+      fadeTimers.set(f.card, setTimeout(() => f.card.removeAttribute("data-touch-glow"), 250)); // CSS then fades it out over 0.35s
+    }
+    if (!fingers.size && touchRaf) { cancelAnimationFrame(touchRaf); touchRaf = 0; }
+  }
+  document.addEventListener("touchend", liftFingers, { passive: true });
+  document.addEventListener("touchcancel", liftFingers, { passive: true });
 
   // ---------- 2. Caret glow in text boxes ----------
   // How it works (same idea as the "glow caret" on the portfolio site): the glow is NOT placed
