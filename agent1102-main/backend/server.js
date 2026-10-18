@@ -24,6 +24,7 @@ const prefsLib = require("./lib/prefs");
 const { createMemory, MemoryUnavailable, memoryCues } = require("./lib/memory");
 const { verifyReply } = require("./lib/verify");
 const web = require("./lib/search");
+const searchCmd = require("./lib/searchcmd");
 
 console.log(">>> agent1102 server build marker: signup-debug-v1 + stream/memory/verify <<<");
 
@@ -261,6 +262,9 @@ function prepareMessages(messages) {
 //  Older clients that don't ask for a stream still get the plain JSON reply.
 // ------------------------------------------------------------------
 const memory = createMemory({ supabase: supabaseAdmin, complete: groq.complete, model: TEXT_MODEL });
+// /search is rationed per person so one user can't use up a free search quota
+const SEARCH_PER_HOUR = parseInt(process.env.SEARCH_PER_HOUR, 10) || 30;
+const searchLimiter = searchCmd.createRateLimiter(SEARCH_PER_HOUR, 60 * 60 * 1000);
 const MAX_HISTORY_CHARS = parseInt(process.env.MAX_HISTORY_CHARS, 10) || 48000; // ~12k tokens of chat history per request
 
 // Saves style settings in the user's auth metadata (no table needed)
@@ -334,10 +338,15 @@ app.post("/chat", async (req, res) => {
   const prepared = prepareMessages(req.body.messages);
   const hasImage = prepared.hasImage;
   const fitted = cues.trimMessages(prepared.messages, MAX_HISTORY_CHARS);
-  const messages = fitted.messages;
-  const lastUser = [...messages].reverse().find(m => m && m.role === "user");
-  const lastUserText = !lastUser ? "" : typeof lastUser.content === "string" ? lastUser.content
-    : Array.isArray(lastUser.content) ? lastUser.content.map(p => (p && p.text) || "").join(" ") : "";
+  // /search is the ONLY thing that triggers a web search. The model never sees the word "/search" (in this
+  // message or in earlier ones): it just sees the question.
+  const lastTextOf = list => {
+    const m = [...list].reverse().find(x => x && x.role === "user");
+    return !m ? "" : typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map(p => (p && p.text) || "").join(" ") : "";
+  };
+  const search = searchCmd.parseSearchCommand(lastTextOf(fitted.messages)); // null, or { files, query }
+  const messages = fitted.messages.map(searchCmd.stripFromMessage);
+  const lastUserText = lastTextOf(messages);
   const hasFiles = /<attached_file/.test(lastUserText);
   const mentionsJymer = /jymer\s*1102/i.test(lastUserText);
 
@@ -353,11 +362,19 @@ app.post("/chat", async (req, res) => {
     }
     const mc = memoryCues(lastUserText);
     const domains = cues.detectDomains(lastUserText);
-    const wantSearch = !hasImage && !hasFiles && web.enabled() && cues.needsFreshInfo(lastUserText, domains);
-    if (wantSearch) status("Searching the web...");
+
+    // The person typed /search: check everything BEFORE spending a search or a model call
+    if (search) {
+      const quick = text => { if (sse) { sse.send({ type: "final", reply: text, meta: {} }); sse.end(); } else res.json({ reply: text, meta: {} }); };
+      if (!user) return quick("Please sign in to use /search.");
+      if (!web.enabled()) return quick("Web search isn't turned on for this site yet (the site owner needs to add a search API key). You can still ask your question without /search and I'll answer from what I know.");
+      if (!search.query) return quick("Add a question after /search, for example: `/search latest Node.js LTS version`.");
+      if (!searchLimiter.allow(user.id)) return quick(`You've used your ${SEARCH_PER_HOUR} web searches for this hour. Try again a bit later. Questions without /search still work.`);
+      status("Searching the web...");
+    }
     const [memories, results] = await Promise.all([
       user && style.memory ? memory.relevant(user.id, lastUserText) : [],
-      wantSearch ? web.searchWeb(lastUserText) : [],
+      search ? web.searchWeb(cues.stripAttachments(search.query)) : [],
     ]);
 
     // 2) the prompt
@@ -366,7 +383,8 @@ app.post("/chat", async (req, res) => {
     if (hasImage) parts.push(P.VISION_RULES);
     domains.forEach(d => parts.push(P.DOMAIN_RULES[d]));
     if (results.length) parts.push(P.searchBlock(results));
-    else if (domains.length || wantSearch) parts.push(P.FRESHNESS_RULE);
+    else if (search) parts.push(P.SEARCH_EMPTY_NOTE);
+    else if (domains.length || cues.needsFreshInfo(lastUserText, domains)) parts.push(P.freshnessRule(web.enabled()));
     parts.push(prefsLib.styleBlock(style), P.memoryBlock(memories));
     if (emo.notes.length) parts.push("EMOTION HINTS (automatic guesses, may be wrong):\n" + emo.notes.map(n => "- " + n).join("\n"));
     if (user && mc.remember) parts.push(style.memory
