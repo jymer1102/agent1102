@@ -1,5 +1,6 @@
 // ============================================================
 //  Improvement 6: up-to-date, expert-level facts via live web search (optional).
+//  It runs ONLY when the person types /search <question> (see lib/searchcmd.js), never automatically.
 //
 //  Set ONE of these in your host's environment and the feature switches on by itself:
 //    TAVILY_API_KEY   (https://tavily.com, free tier)
@@ -19,7 +20,7 @@ const provider = () => (process.env.TAVILY_API_KEY ? "tavily" : process.env.BRAV
 const enabled = () => !!provider();
 
 async function viaTavily(query, max, signal) {
-  const r = await fetch("https://api.tavily.com/search", {
+  const r = await fetch(process.env.TAVILY_API_URL || "https://api.tavily.com/search", { // TAVILY_API_URL is only for tests
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.TAVILY_API_KEY}` },
     body: JSON.stringify({ query, max_results: max, search_depth: "basic", include_answer: false }),
