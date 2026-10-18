@@ -938,7 +938,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const images = pendingImages.slice();
     const hasImage = images.length > 0;
     const files = pendingFiles.slice();
-    if (!typed && !hasImage && !files.length) return;
+    if (!agent1102SendState.canSend(input.value, images.length + files.length)) {
+      // a photo/file is attached but nothing was typed: say why nothing happened
+      if (!typed && (hasImage || files.length)) toast("Type a message to send with your file or photo");
+      return;
+    }
 
     sending = true;
     btn.disabled = true;
