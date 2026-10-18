@@ -92,7 +92,6 @@
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
     const area = document.getElementById("input-area");
-    const studyBtn = document.getElementById("study-btn");
     if (!input || !area) return;
 
     const menu = document.createElement("div");
@@ -103,7 +102,7 @@
 
     let items = [];
     let active = 0;
-    let kind = null; // "typed" (user typed "/") or "study" (study button)
+    let kind = null; // "typed" while the "/" popup is open from typing "/"
 
     function hide() { menu.style.display = "none"; kind = null; items = []; }
 
@@ -145,7 +144,6 @@
     }
 
     function refresh() {
-      if (kind === "study") return;
       const m = /^\/([a-z]*)$/i.exec(input.value);
       if (!m) { hide(); return; }
       const q = m[1].toLowerCase();
@@ -156,7 +154,7 @@
       render();
     }
 
-    input.addEventListener("input", () => { if (kind === "study") hide(); active = 0; refresh(); });
+    input.addEventListener("input", () => { active = 0; refresh(); });
     input.addEventListener("focus", refresh);
     input.addEventListener("blur", () => { if (kind === "typed") setTimeout(hide, 120); });
 
@@ -182,20 +180,6 @@
     // The message box is cleared by chat.js after sending, which doesn't fire "input"
     if (sendBtn) sendBtn.addEventListener("click", () => setTimeout(refresh, 0));
     input.addEventListener("keydown", e => { if (e.key === "Enter") setTimeout(refresh, 0); });
-
-    // Study button: shows just the study modes
-    if (studyBtn) {
-      studyBtn.addEventListener("click", () => {
-        if (kind === "study") { hide(); return; }
-        items = COMMANDS.filter(c => c.group === "Study");
-        active = 0;
-        kind = "study";
-        render();
-      });
-      document.addEventListener("mousedown", e => {
-        if (kind === "study" && !menu.contains(e.target) && !studyBtn.contains(e.target)) hide();
-      });
-    }
   });
 
   window.agent1102Commands = { COMMANDS, parseCommand, parseStudy, parseGraph, isHelp, helpMarkdown };
