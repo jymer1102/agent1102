@@ -43,7 +43,9 @@
   <!-- mhchem extension: lets the AI write chemical equations with \ce{...} inside the same math delimiters -->
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/mhchem.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=20261017a" />
+  <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
+  <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
+  <link rel="stylesheet" href="style.css?v=20261018a" />
 </head>
 
 <body>
@@ -94,7 +96,7 @@
       <button class="icon-btn" id="history-btn" title="Chat history"><i class="fa-solid fa-comment"></i></button>
       <button class="icon-btn" id="new-chat-btn" title="New chat"><i class="fa-solid fa-pencil"></i></button>
     </div>
-    <span class="header-title" id="header-title">agent1102</span>
+    <span class="header-title" id="header-title">agent1102 by jymer1102</span>
     <div class="header-btns" id="header-btns">
       <button class="icon-btn" id="theme-btn" title="Toggle theme"><i class="fa-solid fa-moon"></i></button>
       <button class="icon-btn" id="clear-btn" title="Clear chat"><i class="fa-solid fa-trash-can"></i></button>
@@ -114,7 +116,6 @@
       <button class="tool-btn" id="upload-btn" title="Attach photos, PDFs, Word/PowerPoint files, text/code, or a zip"><i class="fa-solid fa-paperclip"></i></button>
       <input type="file" id="file-input" accept="image/*,.heic,.heif,.pdf,.docx,.pptx,.zip,text/*" multiple style="display:none" />
       <button class="tool-btn" id="mic-btn" title="Voice input"><i class="fa-solid fa-microphone"></i></button>
-      <button class="tool-btn" id="study-btn" title="Study modes: learn, quiz, flashcards"><i class="fa-solid fa-graduation-cap"></i></button>
       <textarea id="input" placeholder="Type a message..."></textarea>
       <button id="send">Send</button>
     </div>
@@ -159,7 +160,7 @@
 <script src="js/mathviz.js?v=20260930a"></script>
 <script src="js/study.js?v=20260930a"></script>
 <script src="js/stream.js?v=20261017b"></script>
-<script src="js/commands.js?v=20261017b"></script>
+<script src="js/commands.js?v=20261018a"></script>
 <script src="js/personal.js?v=20261017b"></script>
 <script src="js/auth.js?v=20261017a"></script>
 <script src="js/profile.js?v=20261017a"></script>
