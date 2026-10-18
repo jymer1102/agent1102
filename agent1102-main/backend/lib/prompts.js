@@ -46,7 +46,15 @@ const DOMAIN_RULES = {
   science: "SCIENCE / RESEARCH TOPIC: be precise with terms, units and orders of magnitude. Distinguish well-established results from active debate or single studies. Do not invent paper titles, authors, DOIs or statistics; if you cannot name a real source, describe the finding without one.",
 };
 
-const FRESHNESS_RULE = "Your built-in knowledge has a cutoff and may be out of date for recent versions, prices, laws, standards and events. If the answer depends on anything that may have changed recently and no search results are provided, say what you know, say it may be outdated, and tell the user what to verify and where.";
+// Search only runs when the user types /search. Without it, the model is told its knowledge may be stale and,
+// when search is available, that the user can ask for a live lookup.
+function freshnessRule(canSearch) {
+  return "Your built-in knowledge has a cutoff and may be out of date for recent versions, prices, laws, standards and events. If the answer depends on anything that may have changed recently, say what you know, say it may be outdated, and tell the user what to verify and where."
+    + (canSearch ? " If it matters here, add one short line telling the user they can type /search followed by their question to look it up on the web right now." : "");
+}
+
+// The user typed /search but nothing usable came back
+const SEARCH_EMPTY_NOTE = "The user used /search, but the web search returned nothing usable (the search service may be down or out of quota, or nothing matched). Say so in one short sentence, then answer from your own knowledge and make clear it may be out of date.";
 
 // Improvement 6 (when web results are supplied)
 function searchBlock(results) {
@@ -82,4 +90,4 @@ function repairInstruction(issues) {
   ].join("\n");
 }
 
-module.exports = { INTENT_RULES, EMOTION_RULES, VISION_RULES, DOMAIN_RULES, FRESHNESS_RULE, searchBlock, memoryBlock, repairInstruction };
+module.exports = { INTENT_RULES, EMOTION_RULES, VISION_RULES, DOMAIN_RULES, freshnessRule, SEARCH_EMPTY_NOTE, searchBlock, memoryBlock, repairInstruction };
