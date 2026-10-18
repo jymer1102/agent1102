@@ -664,3 +664,23 @@ header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify
   cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto;
 }
 #bottom-row #send.send-ready { background:var(--accent); color:#fff; box-shadow:0 0 16px var(--accent-glow); }
+
+/* ============================================================
+   TOUCH SCREENS: the card / header / footer / sidebar glow follows your finger (js/glow.js sets data-touch-glow)
+   ============================================================ */
+/* A phone has no hover: a tap leaves the browser's "hover" stuck on, which showed the glow frozen in the middle of
+   the card. On touch-only devices that stuck hover glow is switched off; the finger-following one below replaces it. */
+@media (hover: none) {
+  .auth-box:hover::before, .modal-box:hover::before, .code-block:hover::before, .chart-block:hover::before,
+  .study-block:hover::before, .link-card:hover::before, .user .msg:hover::before,
+  header:hover::before, #input-area:hover::before, #sidebar:hover::before { opacity:0; }
+}
+.auth-box[data-touch-glow]::before, .modal-box[data-touch-glow]::before, .code-block[data-touch-glow]::before,
+.chart-block[data-touch-glow]::before, .study-block[data-touch-glow]::before, .link-card[data-touch-glow]::before,
+.user .msg[data-touch-glow]::before,
+header[data-touch-glow]::before, #input-area[data-touch-glow]::before, #sidebar[data-touch-glow]::before { opacity:1; }
+.auth-box[data-touch-glow], .modal-box[data-touch-glow], .code-block[data-touch-glow], .chart-block[data-touch-glow],
+.study-block[data-touch-glow], .link-card[data-touch-glow], .user .msg[data-touch-glow],
+header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow] {
+  border-color:var(--border-hover); box-shadow:0 0 25px rgba(30,86,224,0.35);
+}
