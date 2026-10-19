@@ -267,14 +267,43 @@ const SEARCH_PER_HOUR = parseInt(process.env.SEARCH_PER_HOUR, 10) || 30;
 const searchLimiter = searchCmd.createRateLimiter(SEARCH_PER_HOUR, 60 * 60 * 1000);
 const MAX_HISTORY_CHARS = parseInt(process.env.MAX_HISTORY_CHARS, 10) || 48000; // ~12k tokens of chat history per request
 
+// Changes part of a user's auth metadata without clobbering the rest. It reads the FRESHEST copy first, because the
+// login cache can be a few minutes old and another feature (easter-egg progress, say) may have saved in between.
+// `change` is an object to merge in, or a function (currentMetadata) => object to merge in.
+async function patchUserMetadata(userId, change) {
+  const { data, error: readError } = await supabaseAdmin.auth.admin.getUserById(userId);
+  if (readError || !data || !data.user) throw new Error((readError && readError.message) || "User not found");
+  const current = data.user.user_metadata || {};
+  const patch = typeof change === "function" ? change(current) : change;
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { ...current, ...patch } });
+  if (error) throw new Error(error.message);
+  auth.invalidate(userId);
+  return { ...current, ...patch };
+}
+
 // Saves style settings in the user's auth metadata (no table needed)
 async function savePrefs(user, updates) {
-  const merged = { ...prefsLib.readStyle(user.user_metadata), ...prefsLib.cleanUpdates(updates) };
-  const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, { user_metadata: { ...user.user_metadata, style: merged } });
-  if (error) throw new Error(error.message);
-  auth.invalidate(user.id);
-  return merged;
+  const meta = await patchUserMetadata(user.id, current => ({ style: { ...prefsLib.readStyle(current), ...prefsLib.cleanUpdates(updates) } }));
+  return prefsLib.readStyle(meta);
 }
+
+// ---- Renamed chats ----
+// A chat the user renamed is "locked": the automatic titler and the save route must never overwrite the name.
+// The ids of locked chats live in the user's auth metadata (renamed_chats), so no new table column or SQL is needed.
+const MAX_LOCKED_CHATS = 300;
+const lockedChatIds = user => {
+  const list = user && user.user_metadata && user.user_metadata.renamed_chats;
+  return Array.isArray(list) ? list.filter(x => typeof x === "string") : [];
+};
+async function setChatLocked(userId, chatId, locked) {
+  await patchUserMetadata(userId, current => {
+    const list = Array.isArray(current.renamed_chats) ? current.renamed_chats.filter(x => typeof x === "string") : [];
+    const rest = list.filter(x => x !== chatId);
+    return { renamed_chats: locked ? [...rest, chatId].slice(-MAX_LOCKED_CHATS) : rest };
+  });
+}
+// A chat name: no control characters, one space between words, at most 60 characters
+const cleanChatTitle = t => String(t == null ? "" : t).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
 
 // Server-sent events. Headers go out with the FIRST event, so a failure before that can still be a normal JSON error.
 function openSse(res) {
@@ -1450,12 +1479,18 @@ app.post("/chats", async (req, res) => {
       title, history,
       created_at: now, updated_at: now,
     };
+    // The person renamed this chat: whatever title the page sends (an automatic one, or a stale tab's old one) is ignored
+    const verified = await auth.verify(token);
+    if (verified && verified.id === userId && lockedChatIds(verified).includes(id)) {
+      const { data: existing } = await supabaseAdmin.from("chats").select("title").eq("id", id).eq("user_id", userId).maybeSingle();
+      if (existing && existing.title) row.title = existing.title;
+    }
     let { error } = await supabaseAdmin.from("chats").upsert(row);
     if (error && /column|schema cache/i.test(error.message)) {
       // The new columns aren't there yet (supabase/chats.sql hasn't been run). Keep chats
       // working with the old columns, and say so loudly in the logs.
       console.warn("WARNING: chats table is missing username/email/phone/updated_at. Run supabase/chats.sql in the Supabase SQL editor. Saving without them for now.");
-      ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title, history, created_at: now }));
+      ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
     }
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
@@ -1466,8 +1501,11 @@ app.post("/chats", async (req, res) => {
 });
 
 app.get("/chats", async (req, res) => {
-  const userId = await verifiedUserId(req);
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  const user = await auth.verify(auth.bearer(req));
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const userId = user.id;
+  const locked = new Set(lockedChatIds(user));
+  const withLock = rows => (rows || []).map(c => ({ ...c, title_locked: locked.has(c.id) }));
   const { data, error } = await supabaseAdmin.from("chats")
     .select("id, user_id, username, email, phone, title, history, created_at")
     .eq("user_id", userId).order("created_at", { ascending: false });
@@ -1475,9 +1513,34 @@ app.get("/chats", async (req, res) => {
     // Older table without the new columns: fall back to select("*")
     const legacy = await supabaseAdmin.from("chats").select("*").eq("user_id", userId).order("created_at", { ascending: false });
     if (legacy.error) return res.status(500).json({ error: legacy.error.message });
-    return res.json({ chats: legacy.data });
+    return res.json({ chats: withLock(legacy.data) });
   }
-  res.json({ chats: data });
+  res.json({ chats: withLock(data) });
+});
+
+// Rename a chat. { title }                    -> renamed, and the name is locked (never auto-renamed again)
+//                { title, locked: false }     -> "back to automatic": sets this title and lets the titler take over again
+app.patch("/chats/:id", async (req, res) => {
+  const user = await auth.verify(auth.bearer(req));
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const id = String(req.params.id || "");
+  if (typeof req.body.title !== "string") return res.status(400).json({ error: "Give the chat a name." });
+  const title = cleanChatTitle(req.body.title);
+  if (!title) return res.status(400).json({ error: "Give the chat a name." });
+  const locked = req.body.locked !== false;
+  try {
+    await setChatLocked(user.id, id, locked);
+    const { data, error } = await supabaseAdmin.from("chats").update({ title }).eq("id", id).eq("user_id", user.id).select("id");
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) {
+      if (locked) await setChatLocked(user.id, id, false).catch(() => {}); // no such chat: don't leave a stray lock behind
+      return res.status(404).json({ error: "Chat not found." });
+    }
+    res.json({ success: true, title, locked });
+  } catch (e) {
+    console.error("Rename chat failed:", e && e.message ? e.message : e);
+    res.status(500).json({ error: "Couldn't rename the chat." });
+  }
 });
 
 app.delete("/chats/:id", async (req, res) => {
@@ -1485,6 +1548,8 @@ app.delete("/chats/:id", async (req, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const { error } = await supabaseAdmin.from("chats").delete().eq("id", req.params.id).eq("user_id", userId);
   if (error) return res.status(500).json({ error: error.message });
+  const user = await auth.verify(auth.bearer(req));
+  if (user && lockedChatIds(user).includes(req.params.id)) await setChatLocked(userId, req.params.id, false).catch(() => {});
   res.json({ success: true });
 });
 
@@ -1493,6 +1558,7 @@ app.delete("/chats", async (req, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const { error } = await supabaseAdmin.from("chats").delete().eq("user_id", userId);
   if (error) return res.status(500).json({ error: error.message });
+  await patchUserMetadata(userId, { renamed_chats: [] }).catch(() => {});
   res.json({ success: true });
 });
 
