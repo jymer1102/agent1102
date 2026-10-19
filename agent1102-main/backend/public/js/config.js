@@ -50,6 +50,7 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   let isRecording = false;
   let currentChatId = Date.now().toString();
   let currentChatTitle = null; // AI-generated summary title for the sidebar; null = not generated yet
+  let currentChatTitleLocked = false; // true once the person renamed this chat: the automatic titler must leave the name alone
   let userToken = localStorage.getItem("agent1102_token") || null;
   let isSignUp = false;
 
