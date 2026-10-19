@@ -684,3 +684,18 @@ header[data-touch-glow]::before, #input-area[data-touch-glow]::before, #sidebar[
 header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow] {
   border-color:var(--border-hover); box-shadow:0 0 25px rgba(30,86,224,0.35);
 }
+
+/* Rename chat (pencil in the sidebar + the inline name box) */
+.rename-chat-btn { background:none; border:none; color:var(--text-muted); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.85rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
+.rename-chat-btn:hover { background:var(--surface2); color:var(--accent-bright); }
+.history-item-input {
+  flex:1; min-width:0; padding:0.5rem 0.6rem; border-radius:8px; font-size:0.9rem;
+  background:var(--raised); color:var(--text); border:1px solid var(--accent-bright); outline:none;
+  box-shadow:0 0 0 3px var(--accent-glow);
+}
+.history-item.renaming .rename-chat-btn, .history-item.renaming .delete-chat-btn { display:none; }
+
+/* Long chat names: clamp an inner element to 2 lines. (Clamping the padded element itself let a sliver of a 3rd line
+   show through the padding.) */
+.history-item-title { display:block; }
+.history-item-title-text { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; word-break:break-word; }
