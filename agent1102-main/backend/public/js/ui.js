@@ -108,25 +108,26 @@
       });
     });
     // ---- Rename: tap the pencil, type a name, Enter (or tap away) to save, Escape to cancel ----
-    // Leave the name empty to hand naming back to the automatic titler.
+    // Leave the name empty and the AI writes a title for the chat (and keeps it up to date from then on).
     async function saveName(chat, typed) {
-      const reset = !typed;
-      const title = reset ? agent1102Render.historyTitle((chat.history || []).find(m => m.role === "user") || {}) : typed;
+      const auto = !typed; // empty name = "let the AI name it": the server writes a title from the saved conversation
       try {
         const res = await fetch(`${BACKEND_URL}/chats/${encodeURIComponent(chat.id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
-          body: JSON.stringify(reset ? { title, locked: false } : { title }),
+          body: JSON.stringify(auto ? { auto: true } : { title: typed }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || "Couldn't rename the chat.");
         chat.title = data.title; chat.title_locked = data.locked;
         if (chat.id === currentChatId) {
           currentChatTitleLocked = data.locked;
-          currentChatTitle = reset ? null : data.title; // null = let the automatic titler write a fresh one on the next save
-          titleAtCount = 0;
+          currentChatTitle = data.title;
+          // a fresh AI title was just written, so don't write another one for this same message count
+          titleAtCount = auto ? history.filter(m => m.role === "user").length : 0;
         }
       } catch (e) {
+        // Nothing was changed on the server, so the old name simply comes back
         if (typeof showToast === "function") showToast(agent1102Render.escapeHtml(e.message || "Couldn't rename the chat."));
       }
       renderSidebar(chats);
@@ -136,7 +137,7 @@
       if (!titleEl || item.classList.contains("renaming")) return;
       const input = document.createElement("input");
       input.type = "text"; input.className = "history-item-input"; input.value = chat.title || "";
-      input.maxLength = 60; input.placeholder = "Name (empty = automatic)"; input.setAttribute("aria-label", "Chat name");
+      input.maxLength = 60; input.placeholder = "Name (empty = AI title)"; input.setAttribute("aria-label", "Chat name");
       input.autocomplete = "off"; input.spellcheck = false;
       titleEl.replaceWith(input);
       item.classList.add("renaming");
@@ -147,6 +148,15 @@
         finished = true;
         const typed = input.value.replace(/\s+/g, " ").trim();
         if (!commit || typed === (chat.title || "")) { renderSidebar(chats); return; }
+        if (!typed) { // show that the AI is working on it (takes a second or two)
+          const busy = document.createElement("span");
+          busy.className = "history-item-naming"; busy.textContent = "Writing a title...";
+          busy.setAttribute("role", "status");
+          // Let go of focus BEFORE swapping: glow.js puts a caret-glow element next to a focused box and removes it
+          // on blur, and removing it halfway through replaceWith() makes the browser throw.
+          input.blur();
+          input.replaceWith(busy);
+        }
         saveName(chat, typed);
       };
       input.addEventListener("keydown", e => {
