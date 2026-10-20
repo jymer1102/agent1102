@@ -855,55 +855,58 @@ app.post("/graph", async (req, res) => {
 });
 
 // --- CHAT TITLE (auto-summarize the conversation for the sidebar) ---
+// One AI-written title for a conversation. Used by the /title route (automatic titles while chatting) and by
+// "rename -> leave empty" (PATCH /chats/:id { auto: true }), so both produce exactly the same kind of title.
+// Throws an Error with .status (400 nothing to summarize, 429 rate limited, 500 anything else).
+async function generateChatTitle(messages) {
+  // Compact, text-only transcript: strip attached_file blocks/images down to short
+  // markers and cap each turn's length so the summarizer call stays small and cheap.
+  const transcript = messages.slice(-40).map(m => {
+    let text = "";
+    if (typeof m.content === "string") text = m.content;
+    else if (Array.isArray(m.content)) text = m.content.filter(p => p && p.type === "text").map(p => p.text).join(" ");
+    text = text.replace(/<attached_file[^>]*>[\s\S]*?<\/attached_file>/g, "[attached file]").trim().slice(0, 800);
+    if (!text) return null;
+    return `${m.role === "user" ? "User" : "Assistant"}: ${text}`;
+  }).filter(Boolean).join("\n");
+
+  if (!transcript.trim()) { const e = new Error("Nothing to summarize"); e.status = 400; throw e; }
+
+  let content;
+  try {
+    content = await groq.complete({
+      model: TEXT_MODEL,
+      // gpt-oss is a reasoning model: a tiny max_tokens gets eaten by reasoning and
+      // returns an empty title, so leave headroom and keep reasoning low.
+      max_tokens: 400,
+      reasoning_effort: "low",
+      temperature: 0.3,
+      messages: [
+        {
+          role: "system",
+          content: "You write the title for a chat conversation: a one-line AI overview of what the whole chat is about. Read the whole conversation (what the user wanted and what was covered or answered) and reply with ONLY a specific, informative overview of 5-10 words, in sentence case (for example: \"Debugging a Node.js login bug and fixing token expiry\"). Cover the overall arc, not just the first message. Do not use quotes, a trailing period, or a prefix like \"Title:\" \u2014 reply with just the title text itself.",
+        },
+        { role: "user", content: transcript },
+      ],
+    });
+  } catch (err) {
+    if (err instanceof groq.GroqError) { const e = new Error(err.message); e.status = err.status === 429 ? 429 : 500; throw e; }
+    throw err;
+  }
+  const title = String(content || "").replace(/^["'\s]+|["'\s.]+$/g, "").replace(/\s+/g, " ").slice(0, 90);
+  if (!title) { console.warn("Title generation returned empty content"); const e = new Error("No title generated"); e.status = 500; throw e; }
+  return title;
+}
+
 app.post("/title", async (req, res) => {
   if (!Array.isArray(req.body.messages) || !req.body.messages.length) {
     return res.status(400).json({ error: "No messages provided" });
   }
   try {
-    // Compact, text-only transcript: strip attached_file blocks/images down to short
-    // markers and cap each turn's length so the summarizer call stays small and cheap.
-    const transcript = req.body.messages.slice(-40).map(m => {
-      let text = "";
-      if (typeof m.content === "string") text = m.content;
-      else if (Array.isArray(m.content)) text = m.content.filter(p => p && p.type === "text").map(p => p.text).join(" ");
-      text = text.replace(/<attached_file[^>]*>[\s\S]*?<\/attached_file>/g, "[attached file]").trim().slice(0, 800);
-      if (!text) return null;
-      return `${m.role === "user" ? "User" : "Assistant"}: ${text}`;
-    }).filter(Boolean).join("\n");
-
-    if (!transcript.trim()) return res.status(400).json({ error: "Nothing to summarize" });
-
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: TEXT_MODEL,
-        // gpt-oss is a reasoning model: a tiny max_tokens gets eaten by reasoning and
-        // returns an empty title, so leave headroom and keep reasoning low.
-        max_tokens: 400,
-        reasoning_effort: "low",
-        temperature: 0.3,
-        messages: [
-          {
-            role: "system",
-            content: "You write the title for a chat conversation: a one-line AI overview of what the whole chat is about. Read the whole conversation (what the user wanted and what was covered or answered) and reply with ONLY a specific, informative overview of 5-10 words, in sentence case (for example: \"Debugging a Node.js login bug and fixing token expiry\"). Cover the overall arc, not just the first message. Do not use quotes, a trailing period, or a prefix like \"Title:\" \u2014 reply with just the title text itself.",
-          },
-          { role: "user", content: transcript },
-        ],
-      }),
-    });
-    const data = await response.json();
-    let title = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-    title = String(title || "").replace(/^["'\s]+|["'\s.]+$/g, "").replace(/\s+/g, " ").slice(0, 90);
-    if (!title) {
-      console.warn("Title generation returned empty content:", JSON.stringify(data).slice(0, 300));
-      return res.status(500).json({ error: "No title generated" });
-    }
-    res.json({ title });
+    res.json({ title: await generateChatTitle(req.body.messages) });
   } catch (err) {
+    if (err.status === 400 || err.status === 429) return res.status(err.status).json({ error: err.message });
+    if (err.status === 500) return res.status(500).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: "Title generation failed" });
   }
@@ -1519,11 +1522,37 @@ app.get("/chats", async (req, res) => {
 });
 
 // Rename a chat. { title }                    -> renamed, and the name is locked (never auto-renamed again)
-//                { title, locked: false }     -> "back to automatic": sets this title and lets the titler take over again
+//                { auto: true }               -> "back to automatic": the AI writes a title now and the titler takes over again
+//                { title, locked: false }     -> sets this title but leaves the chat on automatic naming
 app.patch("/chats/:id", async (req, res) => {
   const user = await auth.verify(auth.bearer(req));
   if (!user) return res.status(401).json({ error: "Unauthorized" });
   const id = String(req.params.id || "");
+
+  // { auto: true }: the person left the name empty, so the AI writes one (from the saved conversation) and the
+  // chat goes back to automatic naming. If the AI can't, NOTHING changes: the name and its lock stay as they were.
+  if (req.body.auto === true) {
+    try {
+      const { data: row, error: readError } = await supabaseAdmin.from("chats").select("history").eq("id", id).eq("user_id", user.id).maybeSingle();
+      if (readError) throw new Error(readError.message);
+      if (!row) return res.status(404).json({ error: "Chat not found." });
+      let title;
+      try { title = await generateChatTitle(Array.isArray(row.history) ? row.history : []); }
+      catch (e) {
+        if (e.status === 429) return res.status(429).json({ error: e.message });
+        console.warn("Auto title for rename failed:", e && e.message ? e.message : e);
+        return res.status(502).json({ error: "Couldn't write a title right now. Try again in a moment." });
+      }
+      const { error } = await supabaseAdmin.from("chats").update({ title }).eq("id", id).eq("user_id", user.id);
+      if (error) throw new Error(error.message);
+      await setChatLocked(user.id, id, false);
+      return res.json({ success: true, title, locked: false });
+    } catch (e) {
+      console.error("Rename chat (auto) failed:", e && e.message ? e.message : e);
+      return res.status(500).json({ error: "Couldn't rename the chat." });
+    }
+  }
+
   if (typeof req.body.title !== "string") return res.status(400).json({ error: "Give the chat a name." });
   const title = cleanChatTitle(req.body.title);
   if (!title) return res.status(400).json({ error: "Give the chat a name." });
