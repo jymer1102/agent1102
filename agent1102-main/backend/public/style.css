@@ -699,3 +699,8 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
    show through the padding.) */
 .history-item-title { display:block; }
 .history-item-title-text { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; word-break:break-word; }
+
+/* Shown in the sidebar while the AI is writing a chat's title */
+.history-item-naming { flex:1; padding:0.6rem 0.4rem; font-size:0.9rem; font-style:italic; color:var(--text-muted); animation:namingPulse 1.2s ease-in-out infinite; }
+@keyframes namingPulse { 0%, 100% { opacity:0.45; } 50% { opacity:1; } }
+@media (prefers-reduced-motion: reduce) { .history-item-naming { animation:none; } }
