@@ -64,7 +64,7 @@
         profileMsg.style.color = "#2ecc71"; profileMsg.textContent = "Saved!";
         setTimeout(() => { profileModal.classList.remove("open"); profileMsg.textContent = ""; }, 1500);
       }
-    } catch { profileMsg.style.color = "#e74c3c"; profileMsg.textContent = "Something went wrong."; }
+    } catch { profileMsg.style.color = "#e74c3c"; profileMsg.textContent = "I can't reach the server right now. Check your connection and try again."; }
     profileSave.disabled = false; profileSave.textContent = "Save";
   });
 
@@ -74,9 +74,9 @@
     try {
       const res = await fetch(`${BACKEND_URL}/auth/delete`, { method: "DELETE", headers: { "Authorization": `Bearer ${userToken}` } });
       const data = await res.json();
-      if (data.error) { alert("Error: " + data.error); return; }
+      if (data.error) { showToast(agent1102Render.escapeHtml(data.error)); return; }
       localStorage.clear(); showAuth();
-    } catch { alert("Something went wrong. Try again."); }
+    } catch { showToast("I couldn't delete your account because I can't reach the server. Check your connection and try again."); }
   });
 
   // --- PROFILE PICTURE UPLOAD LOGIC ---
@@ -91,15 +91,15 @@
       body: file,
     });
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "Upload failed");
+    if (!res.ok || data.error) throw new Error(data.error || "I couldn't upload that picture. Please try again.");
     return data.avatar_url;
   }
 
   avatarInput.addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (!AVATAR_TYPES.includes(file.type)) { showToast("Only JPG, PNG, and WEBP images are allowed!"); e.target.value = ""; return; }
-    if (file.size > AVATAR_MAX_BYTES) { showToast(`File too big! Max ${AVATAR_MAX_BYTES / 1024 / 1024}MB.`); e.target.value = ""; return; }
+    if (!AVATAR_TYPES.includes(file.type)) { showToast("Profile pictures must be JPG, PNG or WEBP images."); e.target.value = ""; return; }
+    if (file.size > AVATAR_MAX_BYTES) { showToast(`That picture is too big. Profile pictures can be up to ${AVATAR_MAX_BYTES / 1024 / 1024} MB.`); e.target.value = ""; return; }
 
     // Show the picture right away from the local file while it uploads
     const previousUrl = localStorage.getItem("agent1102_avatar");
@@ -118,7 +118,9 @@
       console.error("Avatar upload failed:", err);
       setAvatar(previousUrl); // put the old picture back
       URL.revokeObjectURL(localUrl);
-      showToast(String(err.message || "Upload failed. Try again.").replace(/&/g, "&amp;").replace(/</g, "&lt;"));
+      // a failed request (no connection) has the browser's own wording, so only server messages are shown as-is
+      const reason = err instanceof TypeError ? "I can't reach the server right now. Check your connection and try again." : err.message;
+      showToast(agent1102Render.escapeHtml(reason || "I couldn't upload that picture. Please try again."));
     }
     e.target.value = "";
   });
