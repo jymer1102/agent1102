@@ -32,7 +32,7 @@
       bar.style.cssText = "display:flex;gap:0.25rem;margin:-0.4rem 0 0.6rem;";
       bar.appendChild(button("fa-copy", "Copy CSV", async b => {
         try { await navigator.clipboard.writeText(tableToCsv(table)); b.classList.add("copied"); setTimeout(() => b.classList.remove("copied"), 1200); }
-        catch (_) { if (typeof showToast === "function") showToast("Couldn't copy: your browser blocked it"); }
+        catch (_) { if (typeof showToast === "function") showToast("I couldn't copy that. Your browser blocked it."); }
       }));
       bar.appendChild(button("fa-download", "Download CSV", () => {
         const blob = new Blob(["\uFEFF" + tableToCsv(table)], { type: "text/csv;charset=utf-8" }); // BOM so Excel reads accents correctly
