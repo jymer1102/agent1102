@@ -4,15 +4,15 @@
 //  One rule decides both: canSend(). chat.js asks it before sending (so clicking, pressing Enter and the
 //  "/" menu all obey it), and this file asks it to light the button up or dim it.
 //
-//  "Something to send" = at least one real character. Spaces, tabs, new lines, non-breaking spaces and
-//  invisible zero-width characters don't count.
+//  "Something to send" = at least one real character (spaces, tabs, new lines, non-breaking spaces and
+//  invisible zero-width characters don't count), OR a photo/file attached (see the switch below).
 // ============================================================
 (function () {
   "use strict";
 
-  // true  = a photo or file alone is NOT enough: the person must also type something (what you asked for)
-  // false = a photo or file alone can be sent, like before
-  const REQUIRE_TEXT_WITH_ATTACHMENTS = true;
+  // false = a photo or file alone can be sent (nothing typed is fine)
+  // true  = a photo or file alone is NOT enough: the person must also type something
+  const REQUIRE_TEXT_WITH_ATTACHMENTS = false;
 
   const hasText = text => String(text == null ? "" : text).replace(/[\s\p{Cf}]/gu, "").length > 0;
   const canSend = (text, attachmentCount) => hasText(text) || (!REQUIRE_TEXT_WITH_ATTACHMENTS && attachmentCount > 0);
