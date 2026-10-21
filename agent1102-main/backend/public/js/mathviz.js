@@ -90,7 +90,7 @@
     // drop a leading "y =", "f(x) =", "r =" ...
     const eq = src.match(/^\s*[a-zA-Z]\w*(?:\s*\(\s*[a-zA-Z]\w*\s*\))?\s*=(?!=)\s*(.+)$/);
     if (eq && !/=/.test(eq[1])) src = eq[1];
-    if (!src.trim()) throw new Error("Empty expression");
+    if (!src.trim()) throw new Error("an expression is empty.");
     const toks = tokenize(src);
     let i = 0;
     const peek = () => toks[i];
@@ -134,12 +134,12 @@
       if (k.t === "num") { i++; const n = k.v; return () => n; }
       if (k.t === "op" && k.v === "(") {
         i++; const e = parseExpr();
-        if (!isOp(")")) throw new Error("Missing )");
+        if (!isOp(")")) throw new Error("a closing ) is missing.");
         i++; return e;
       }
       if (k.t === "op" && k.v === "|") { // |x| absolute value
         i++; const e = parseExpr();
-        if (!isOp("|")) throw new Error("Missing closing |");
+        if (!isOp("|")) throw new Error("a closing | is missing.");
         i++; return v => Math.abs(e(v));
       }
       if (k.t === "id") {
@@ -152,10 +152,10 @@
             if (!isOp(",")) throw new Error(`${name}() needs two values`);
             i++;
             const b = parseExpr();
-            if (!isOp(")")) throw new Error("Missing )");
+            if (!isOp(")")) throw new Error("a closing ) is missing.");
             i++; const fn = FUNCS2[name]; return v => fn(a(v), b(v));
           }
-          if (!isOp(")")) throw new Error("Missing )");
+          if (!isOp(")")) throw new Error("a closing ) is missing.");
           i++; const fn = FUNCS1[name]; return v => fn(a(v));
         }
         if (FUNCS1[name] && toks[i] && (toks[i].t === "num" || toks[i].t === "id" || (toks[i].t === "op" && toks[i].v === "|"))) {
@@ -681,14 +681,14 @@
 
   function parseSpec(raw) {
     const spec = typeof raw === "string" ? parseLoose(raw) : raw;
-    if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("the data isn't a valid object.");
+    if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("the data was incomplete or malformed.");
     return spec;
   }
 
   function errorBox(msg) {
     const box = document.createElement("div");
     box.className = "study-block study-error";
-    box.textContent = `Couldn't draw this math visual: ${msg}`;
+    box.textContent = `I couldn't draw this math visual: ${msg} Try asking for it again.`;
     return box;
   }
 
@@ -724,7 +724,7 @@
   function build(raw) {
     let spec, out;
     try { spec = parseSpec(raw); out = svgFor(spec); }
-    catch (e) { return errorBox(e instanceof SyntaxError ? "the data wasn't valid JSON." : e.message); }
+    catch (e) { return errorBox(e instanceof SyntaxError ? "the data was incomplete or malformed." : e.message); }
     const block = document.createElement("div");
     block.className = "study-block mathviz-block";
     const bar = document.createElement("div");
