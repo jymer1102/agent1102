@@ -27,13 +27,13 @@
   }
   function errorBox(kind, rawText, msg) {
     const box = el("div", "study-block study-error");
-    box.textContent = `Couldn't show this ${kind}: ${msg}`;
+    box.textContent = `I couldn't show this ${kind}: ${msg} Try asking for it again.`;
     return box;
   }
 
   /* ------------------------------ Quiz ------------------------------ */
   function normalizeQuiz(raw) {
-    if (!raw || !Array.isArray(raw.questions)) throw new Error("the quiz data isn't valid.");
+    if (!raw || !Array.isArray(raw.questions)) throw new Error("the quiz data was incomplete or malformed.");
     const questions = raw.questions.filter(q => q && q.question && Array.isArray(q.options) && q.options.length >= 2 &&
       Number.isInteger(q.answer) && q.answer >= 0 && q.answer < q.options.length)
       .map(q => ({ question: String(q.question), options: q.options.map(String), answer: q.answer, explanation: q.explanation ? String(q.explanation) : "", visual: q.visual && typeof q.visual === "object" ? q.visual : null }));
@@ -44,7 +44,7 @@
   function buildQuiz(rawText) {
     let quiz;
     try { quiz = normalizeQuiz(JSON.parse(rawText)); }
-    catch (e) { return errorBox("quiz", rawText, e instanceof SyntaxError ? "the data wasn't valid JSON." : e.message); }
+    catch (e) { return errorBox("quiz", rawText, e instanceof SyntaxError ? "the data was incomplete or malformed." : e.message); }
 
     const block = el("div", "study-block quiz-block");
     const head = el("div", "study-head");
@@ -137,7 +137,7 @@
 
   /* --------------------------- Flashcards --------------------------- */
   function normalizeDeck(raw) {
-    if (!raw || !Array.isArray(raw.cards)) throw new Error("the flashcard data isn't valid.");
+    if (!raw || !Array.isArray(raw.cards)) throw new Error("the flashcard data was incomplete or malformed.");
     const obj = v => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
     const cards = raw.cards.filter(c => c && c.front && c.back).map(c => ({ front: String(c.front), back: String(c.back), frontVisual: obj(c.frontVisual), backVisual: obj(c.backVisual) }));
     if (!cards.length) throw new Error("it has no usable cards.");
@@ -147,7 +147,7 @@
   function buildFlashcards(rawText) {
     let deck;
     try { deck = normalizeDeck(JSON.parse(rawText)); }
-    catch (e) { return errorBox("flashcards", rawText, e instanceof SyntaxError ? "the data wasn't valid JSON." : e.message); }
+    catch (e) { return errorBox("flashcards", rawText, e instanceof SyntaxError ? "the data was incomplete or malformed." : e.message); }
 
     const block = el("div", "study-block cards-block");
     const head = el("div", "study-head");
