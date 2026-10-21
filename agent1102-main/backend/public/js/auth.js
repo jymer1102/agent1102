@@ -54,8 +54,9 @@
   });
 
   // Auth
-  document.getElementById("discord-btn").addEventListener("click", () => { window.location.href = `${BACKEND_URL}/auth/oauth/discord`; });
-  document.getElementById("github-btn").addEventListener("click", () => { window.location.href = `${BACKEND_URL}/auth/oauth/github`; });
+  authStay.checked = agent1102Session.stay(); // the box shows this device's last choice (ticked for a new device)
+  document.getElementById("discord-btn").addEventListener("click", () => { agent1102Session.begin(authStay.checked); window.location.href = `${BACKEND_URL}/auth/oauth/discord`; });
+  document.getElementById("github-btn").addEventListener("click", () => { agent1102Session.begin(authStay.checked); window.location.href = `${BACKEND_URL}/auth/oauth/github`; });
 
   authToggle.addEventListener("click", () => {
     isSignUp = !isSignUp;
@@ -105,6 +106,7 @@
         return;
       }
       setAuthMessage("");
+      agent1102Session.begin(authStay.checked); // remember whether this login should survive closing the browser
       userToken = data.session.access_token;
       localStorage.setItem("agent1102_token", userToken);
       localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
@@ -135,8 +137,8 @@
     appEl.style.display = "none";
     authScreen.style.display = "flex";
     userToken = null;
-    localStorage.removeItem("agent1102_token");
-    localStorage.removeItem("agent1102_refresh_token");
+    agent1102Session.end(); // removes the saved login
+    authStay.checked = agent1102Session.stay(); // the box shows this device's last choice
     authPassword.value = "";
     setAuthMessage("");
     authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; // was left on "Loading..." after a successful sign-in
