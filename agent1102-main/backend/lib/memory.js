@@ -83,11 +83,11 @@ function createMemory({ supabase, complete, model, log = console }) {
     if (isMissingTable(error)) {
       unavailableUntil = Date.now() + 5 * 60 * 1000;
       if (!warned) { warned = true; log.warn("WARNING: long-term memory is off because the user_memories table is missing. Run supabase/memory.sql in the Supabase SQL editor."); }
-      throw new MemoryUnavailable("Memory isn't set up yet. The site owner needs to run supabase/memory.sql once.");
+      throw new MemoryUnavailable("Memory isn't available right now.");
     }
     throw new Error(error.message || "Memory error");
   }
-  function guard() { if (Date.now() < unavailableUntil) throw new MemoryUnavailable("Memory isn't set up yet. The site owner needs to run supabase/memory.sql once."); }
+  function guard() { if (Date.now() < unavailableUntil) throw new MemoryUnavailable("Memory isn't available right now."); }
 
   async function list(userId) {
     guard();
