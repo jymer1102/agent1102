@@ -65,44 +65,57 @@
     authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In";
     authToggle.textContent = isSignUp ? "Already have an account? Sign in" : "Don't have an account? Sign up";
     authPassword.autocomplete = isSignUp ? "new-password" : "current-password"; // tells the password manager whether to fill or suggest
-    authError.textContent = "";
+    setAuthMessage("");
   });
 
   // Submitting the <form> (button or Enter key) signs in / up. Using a real form submit is what lets the
   // browser offer to save the password and autofill it next time.
   authForm.addEventListener("submit", (e) => { e.preventDefault(); if (!authSubmit.disabled) submitAuth(); });
 
+  // One place for the message under the sign-in form. info = good news (shown green), otherwise it is an error (red).
+  function setAuthMessage(text, info) {
+    authError.textContent = text || "";
+    authError.classList.toggle("info", !!info && !!text);
+  }
+  function resetAuthButton() {
+    authSubmit.disabled = false;
+    authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In";
+  }
+
   async function submitAuth() {
     const email = authEmail.value.trim();
     const password = authPassword.value.trim();
     const name = authName.value.trim();
     const phone = authPhone.value.trim();
-    if (!email || !password || (isSignUp && !name)) { authError.textContent = "Please fill in all fields."; return; }
+    if (!email || !password || (isSignUp && !name)) { setAuthMessage(isSignUp ? "Please fill in your name, email and password." : "Please enter your email and password."); return; }
     authSubmit.disabled = true; authSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin-pulse"></i> Loading...';
     try {
       const res = await fetch(`${BACKEND_URL}${isSignUp ? "/auth/signup" : "/auth/login"}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, name, phone }),
       });
-      const status = res.status;
       const data = await res.json().catch(() => ({}));
-      // TEMPORARY DEBUG — shows exactly what the server sent back, remove once fixed.
-      authError.textContent = `DEBUG [status ${status}]: ${JSON.stringify(data)}`;
-      console.log("Signup/login raw response:", status, data);
-      if (data.error) { authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; return; }
+      if (data.error) { setAuthMessage(data.error); resetAuthButton(); return; }
       if (!data.session) {
         // Supabase's "Confirm email" setting is on: the account was created but
         // needs email confirmation before it gets a session.
-        authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In";
+        if (data.needsConfirmation) setAuthMessage("Almost there! Check your email for a confirmation link, then come back and sign in.", true);
+        else setAuthMessage("I couldn't sign you in. Please try again.");
+        resetAuthButton();
         return;
       }
+      setAuthMessage("");
       userToken = data.session.access_token;
       localStorage.setItem("agent1102_token", userToken);
       localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
       localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
       hidePasswords();
       showApp();
-    } catch (err) { authError.textContent = "DEBUG (network/JS error): " + (err && err.message ? err.message : String(err)); authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; }
+    } catch (err) {
+      console.error("Sign-in request failed:", err);
+      setAuthMessage("I can't reach the server right now. Check your connection and try again in a moment.");
+      resetAuthButton();
+    }
   }
 
   async function showApp() {
@@ -125,13 +138,23 @@
     localStorage.removeItem("agent1102_token");
     localStorage.removeItem("agent1102_refresh_token");
     authPassword.value = "";
-    authError.textContent = "";
+    setAuthMessage("");
     authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; // was left on "Loading..." after a successful sign-in
     hidePasswords();
     clearAvatar();
     // easter egg progress belongs to the account, so the next person on this browser starts clean
     if (typeof resetEasterEggs === "function") resetEasterEggs();
   }
+
+  // The server sends people back to /?error=oauth_failed when Discord/GitHub sign-in doesn't complete
+  window.addEventListener("DOMContentLoaded", () => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") !== "oauth_failed") return;
+    setAuthMessage("That sign-in didn't work. Please try again, or sign in with your email and password.");
+    params.delete("error");
+    const rest = params.toString();
+    history.replaceState(null, "", window.location.pathname + (rest ? "?" + rest : "") + window.location.hash);
+  });
 
   // Wait for DOMContentLoaded so profile.js / chat.js (loaded after this file) are defined
   // before showApp() calls into them.
