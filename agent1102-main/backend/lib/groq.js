@@ -21,10 +21,13 @@ function parseResetSeconds(v) {
   return Math.max(1, Math.ceil(total));
 }
 
+const AI_PROBLEM = "The AI service had a problem. Please try again in a moment.";
+const AI_NO_REPLY = "The AI didn't send a reply. Please try again.";
+
 function rateLimitText(resetSeconds) {
   const mins = Math.floor(resetSeconds / 60), secs = resetSeconds % 60;
   const t = mins > 0 ? `${mins} minute${mins !== 1 ? "s" : ""}` : `${secs} second${secs !== 1 ? "s" : ""}`;
-  return `Token limit reached... Try again in ${t}.`;
+  return `I've hit my usage limit for now. Please try again in ${t}.`;
 }
 
 // Turns a failed Groq reply into { status, message } for the client
@@ -33,8 +36,9 @@ function describeError(data, response) {
   if (err && err.code === "rate_limit_exceeded") {
     return { status: 429, message: rateLimitText(parseResetSeconds(response && response.headers.get("x-ratelimit-reset-tokens"))) };
   }
+  // the AI service's own wording is for the server log, not for the person chatting
   console.error("Groq error:", JSON.stringify(err || data));
-  return { status: 500, message: err && err.message ? `AI error: ${String(err.message).slice(0, 300)}` : "No response from AI" };
+  return { status: 500, message: err && err.message ? AI_PROBLEM : AI_NO_REPLY };
 }
 
 class GroqError extends Error {
@@ -80,8 +84,8 @@ async function stream(body, onDelta, signal) {
     while ((nl = buf.indexOf("\n")) !== -1) { handleLine(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
   }
   if (buf) handleLine(buf);
-  if (!full.trim()) throw new GroqError({ status: 500, message: "No response from AI" });
+  if (!full.trim()) throw new GroqError({ status: 500, message: AI_NO_REPLY });
   return full;
 }
 
-module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError };
+module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError, AI_PROBLEM, AI_NO_REPLY };
