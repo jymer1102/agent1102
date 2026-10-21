@@ -60,6 +60,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const toast = msg => { if (typeof showToast === "function") showToast(msg); };
+  // File names go inside toasts, which are HTML, so they are escaped first. Returns the name in quotes.
+  const nm = f => '"' + agent1102Render.escapeHtml(typeof f === "string" ? f : (f && f.name) || "that file") + '"';
+  const mb = bytes => `${Math.round(bytes / (1024 * 1024))} MB`;
+  const kb = bytes => `${Math.round(bytes / 1024)} KB`;
+  // Shown (instead of a reply) when the request never reached the server or came back unreadable
+  const SERVER_UNREACHABLE = "I can't reach the server right now. Check your connection and try again in a moment.";
+  const SOMETHING_WRONG = "Something went wrong. Please try again.";
 
   // Loads a <script> once (used to lazy-load heic2any / pdf.js / JSZip only when actually needed)
   const loadedScripts = new Map();
@@ -132,10 +139,10 @@ document.addEventListener("DOMContentLoaded", () => {
           autoLevels(ctx, Math.round(w), Math.round(h));
           resolve(canvas.toDataURL("image/jpeg", 0.88));
         };
-        img.onerror = () => { toast("Failed to load image"); resolve(null); };
+        img.onerror = () => { toast("I couldn't open that image. Please try a different one."); resolve(null); };
         img.src = e.target.result;
       };
-      reader.onerror = () => { toast("Failed to read file"); resolve(null); };
+      reader.onerror = () => { toast("I couldn't read that file. Please try again."); resolve(null); };
       reader.readAsDataURL(file);
     });
   }
@@ -202,25 +209,25 @@ document.addEventListener("DOMContentLoaded", () => {
   // pending "file" attachment, enforcing the size caps. Returns true if it was added.
   function addExtractedText(name, text, opts) {
     opts = opts || {};
-    if (pendingFiles.length >= MAX_FILES) { if (!opts.silent) toast(`You can attach up to ${MAX_FILES} files at once`); return false; }
-    if (text.includes("\u0000")) { if (!opts.silent) toast(`"${name}" looks like a binary file, so I can't read it`); return false; }
-    if (!text.trim()) { if (!opts.silent) toast(`"${name}" is empty`); return false; }
+    if (pendingFiles.length >= MAX_FILES) { if (!opts.silent) toast(`You can attach up to ${MAX_FILES} files at a time.`); return false; }
+    if (text.includes("\u0000")) { if (!opts.silent) toast(`I can't read ${nm(name)} because it isn't a text file.`); return false; }
+    if (!text.trim()) { if (!opts.silent) toast(`${nm(name)} is empty, so there's nothing to send.`); return false; }
 
     const used = pendingFiles.reduce((n, f) => n + f.text.length, 0);
     let truncated = false;
     if (text.length > MAX_FILE_CHARS) { text = text.slice(0, MAX_FILE_CHARS); truncated = true; }
-    if (used + text.length > MAX_TOTAL_CHARS) { if (!opts.silent) toast("Those files are too big to send together. Try fewer or smaller files"); return false; }
+    if (used + text.length > MAX_TOTAL_CHARS) { if (!opts.silent) toast("Those files are too big to send together. Try fewer or smaller files."); return false; }
     pendingFiles.push({ name, text, truncated });
-    if (truncated && !opts.silent) toast(`"${name}" is long, so only the first ${MAX_FILE_CHARS.toLocaleString()} characters will be sent`);
+    if (truncated && !opts.silent) toast(`${nm(name)} is long, so only the first ${MAX_FILE_CHARS.toLocaleString()} characters will be sent.`);
     return true;
   }
 
   async function addImage(file) {
-    if (pendingImages.length >= MAX_IMAGES) { toast(`You can attach up to ${MAX_IMAGES} images at once`); return; }
+    if (pendingImages.length >= MAX_IMAGES) { toast(`You can attach up to ${MAX_IMAGES} images at a time.`); return; }
 
     let workingFile = file;
     if (isHeic(file)) {
-      toast(`Converting "${file.name}"...`);
+      toast(`Converting ${nm(file)}...`);
       try {
         const heic2any = await ensureHeic2Any();
         const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
@@ -228,24 +235,24 @@ document.addEventListener("DOMContentLoaded", () => {
         workingFile = new File([blob], file.name.replace(/\.hei[cf]$/i, ".jpg"), { type: "image/jpeg" });
       } catch (err) {
         console.error(err);
-        toast(`Couldn't convert "${file.name}" from HEIC. Try exporting it as JPG first`);
+        toast(`I couldn't convert ${nm(file)} from HEIC. Try exporting it as a JPG first.`);
         return;
       }
     } else if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
-      toast(`"${file.name}" isn't a supported image (use JPG, PNG, WEBP, GIF or HEIC)`); return;
+      toast(`${nm(file)} isn't a supported image type. Please use JPG, PNG, WEBP, GIF or HEIC.`); return;
     }
 
-    if (workingFile.size > MAX_IMAGE_BYTES) { toast(`"${file.name}" is too large. Max image size is 10MB`); return; }
+    if (workingFile.size > MAX_IMAGE_BYTES) { toast(`${nm(file)} is too large. Images can be up to ${mb(MAX_IMAGE_BYTES)}.`); return; }
     const compressed = await compressImage(workingFile);
     if (!compressed) return;
     pendingImages.push({ base64: compressed.split(",")[1], type: "image/jpeg" });
   }
 
   async function addTextFile(file) {
-    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at once`); return; }
-    if (file.size > MAX_FILE_BYTES) { toast(`"${file.name}" is too large (max ${Math.round(MAX_FILE_BYTES / 1024)} KB)`); return; }
+    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at a time.`); return; }
+    if (file.size > MAX_FILE_BYTES) { toast(`${nm(file)} is too large. Text and code files can be up to ${kb(MAX_FILE_BYTES)}.`); return; }
     let text;
-    try { text = await file.text(); } catch { toast(`Couldn't read "${file.name}"`); return; }
+    try { text = await file.text(); } catch { toast(`I couldn't read ${nm(file)}. Please try again.`); return; }
     addExtractedText(file.name, text);
   }
 
@@ -253,11 +260,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // basically no selectable text (a scan), render its first page(s) as images
   // instead so the vision model can look at them directly.
   async function addPdfFile(file) {
-    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at once`); return; }
-    if (file.size > MAX_PDF_BYTES) { toast(`"${file.name}" is too large (max ${MAX_PDF_BYTES / (1024 * 1024)}MB)`); return; }
+    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at a time.`); return; }
+    if (file.size > MAX_PDF_BYTES) { toast(`${nm(file)} is too large. PDFs can be up to ${mb(MAX_PDF_BYTES)}.`); return; }
 
     let pdfjsLib;
-    try { pdfjsLib = await ensurePdfJs(); } catch (err) { console.error(err); toast("Couldn't load the PDF reader. Check your connection and try again"); return; }
+    try { pdfjsLib = await ensurePdfJs(); } catch (err) { console.error(err); toast("I couldn't load the PDF reader. Check your connection and try again."); return; }
 
     try {
       const buf = await file.arrayBuffer();
@@ -278,7 +285,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (text.trim().length < 40) {
         const room = MAX_IMAGES - pendingImages.length;
         if (room <= 0) {
-          toast(`"${file.name}" looks like a scanned PDF with no selectable text, and you're out of image slots to show it visually`);
+          toast(`${nm(file)} looks like a scanned PDF with no selectable text, and there's no room left to attach its pages as images. Remove a photo and try again.`);
           return;
         }
         const pagesToRender = Math.min(pageCount, room);
@@ -292,14 +299,14 @@ document.addEventListener("DOMContentLoaded", () => {
           await page.render({ canvasContext: ctx, viewport }).promise;
           pendingImages.push({ base64: canvas.toDataURL("image/jpeg", 0.88).split(",")[1], type: "image/jpeg" });
         }
-        toast(`"${file.name}" looks scanned, so ${pagesToRender} page${pagesToRender === 1 ? "" : "s"} of it were attached as image${pagesToRender === 1 ? "" : "s"} instead of text`);
+        toast(`${nm(file)} looks scanned, so ${pagesToRender} page${pagesToRender === 1 ? "" : "s"} of it ${pagesToRender === 1 ? "was" : "were"} attached as image${pagesToRender === 1 ? "" : "s"} instead of text.`);
         return;
       }
 
       addExtractedText(file.name, text.trim());
     } catch (err) {
       console.error(err);
-      toast(`Couldn't read "${file.name}" as a PDF`);
+      toast(`I couldn't read ${nm(file)} as a PDF. The file may be damaged or password-protected.`);
     }
   }
 
@@ -309,10 +316,10 @@ document.addEventListener("DOMContentLoaded", () => {
     .replace(/<[^>]+>/g, "")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
   async function addOfficeFile(file, kind) {
-    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at once`); return; }
-    if (file.size > MAX_PDF_BYTES) { toast(`"${file.name}" is too large (max ${MAX_PDF_BYTES / (1024 * 1024)}MB)`); return; }
+    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at a time.`); return; }
+    if (file.size > MAX_PDF_BYTES) { toast(`${nm(file)} is too large. PDFs can be up to ${mb(MAX_PDF_BYTES)}.`); return; }
     let JSZip;
-    try { JSZip = await ensureJsZip(); } catch (err) { console.error(err); toast("Couldn't load the file reader. Check your connection and try again"); return; }
+    try { JSZip = await ensureJsZip(); } catch (err) { console.error(err); toast("I couldn't load the file reader. Check your connection and try again."); return; }
     try {
       const zip = await JSZip.loadAsync(file);
       let text = "";
@@ -345,11 +352,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
       text = text.replace(/\n{3,}/g, "\n\n").trim();
-      if (!text) { toast(`"${file.name}" has no text I can read (it may just contain pictures)`); return; }
+      if (!text) { toast(`${nm(file)} has no text I can read. It may only contain pictures.`); return; }
       addExtractedText(file.name, text);
     } catch (err) {
       console.error(err);
-      toast(`Couldn't read "${file.name}". Is it a valid ${{ docx: "Word (.docx)", pptx: "PowerPoint (.pptx)", xlsx: "Excel (.xlsx)", odf: "OpenDocument" }[kind]} file?`);
+      toast(`I couldn't read ${nm(file)}. Is it a valid ${{ docx: "Word (.docx)", pptx: "PowerPoint (.pptx)", xlsx: "Excel (.xlsx)", odf: "OpenDocument" }[kind]} file?`);
     }
   }
 
@@ -392,10 +399,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Rich Text Format (.rtf): strip the control codes, keep the words
   async function addRtfFile(file) {
-    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at once`); return; }
-    if (file.size > MAX_FILE_BYTES * 4) { toast(`"${file.name}" is too large`); return; }
+    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at a time.`); return; }
+    if (file.size > MAX_FILE_BYTES * 4) { toast(`${nm(file)} is too large. RTF files can be up to ${kb(MAX_FILE_BYTES * 4)}.`); return; }
     let raw;
-    try { raw = await file.text(); } catch { toast(`Couldn't read "${file.name}"`); return; }
+    try { raw = await file.text(); } catch { toast(`I couldn't read ${nm(file)}. Please try again.`); return; }
     const text = raw
       .replace(/\{\\\*[^{}]*\}/g, "")
       .replace(/\{\\(?:fonttbl|colortbl|stylesheet|info|pict)[\s\S]*?\}\}?/g, "")
@@ -409,11 +416,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Zips: extract every readable text/code file inside (skipping images, binaries,
   // and anything oversized), each added as its own attachment named "zip/path/to/file".
   async function addZipFile(file) {
-    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at once`); return; }
-    if (file.size > MAX_ZIP_BYTES) { toast(`"${file.name}" is too large (max ${MAX_ZIP_BYTES / (1024 * 1024)}MB)`); return; }
+    if (pendingFiles.length >= MAX_FILES) { toast(`You can attach up to ${MAX_FILES} files at a time.`); return; }
+    if (file.size > MAX_ZIP_BYTES) { toast(`${nm(file)} is too large. Zip files can be up to ${mb(MAX_ZIP_BYTES)}.`); return; }
 
     let JSZip;
-    try { JSZip = await ensureJsZip(); } catch (err) { console.error(err); toast("Couldn't load the zip reader. Check your connection and try again"); return; }
+    try { JSZip = await ensureJsZip(); } catch (err) { console.error(err); toast("I couldn't load the zip reader. Check your connection and try again."); return; }
 
     try {
       const zip = await JSZip.loadAsync(file);
@@ -430,11 +437,11 @@ document.addEventListener("DOMContentLoaded", () => {
         if (added) extracted++; else skipped++;
       }
 
-      if (extracted === 0) toast(`No readable text/code files found inside "${file.name}"`);
-      else toast(`Extracted ${extracted} file${extracted === 1 ? "" : "s"} from "${file.name}"${skipped ? ` (${skipped} skipped)` : ""}`);
+      if (extracted === 0) toast(`I couldn't find any readable text or code files inside ${nm(file)}.`);
+      else toast(`Extracted ${extracted} file${extracted === 1 ? "" : "s"} from ${nm(file)}${skipped ? ` (${skipped} skipped)` : ""}.`);
     } catch (err) {
       console.error(err);
-      toast(`Couldn't read "${file.name}" as a zip`);
+      toast(`I couldn't open ${nm(file)} as a zip file. It may be damaged.`);
     }
   }
 
@@ -451,8 +458,8 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (isRtf(file)) await addRtfFile(file);
       else if (isZip(file)) await addZipFile(file);
       else if (isTextFile(file)) await addTextFile(file);
-      else if (isOldOffice(file)) toast(`"${file.name}" is an older format I can't read. Save it as .docx, .pptx, .xlsx or PDF and try again`);
-      else toast(`"${file.name}" isn't a supported file type yet (photos, PDF, Word, PowerPoint, Excel, OpenDocument, RTF, text/code and zip work)`);
+      else if (isOldOffice(file)) toast(`${nm(file)} is an older format I can't read. Save it as .docx, .pptx, .xlsx or PDF and try again.`);
+      else toast(`I can't read ${nm(file)} yet. I can open photos, PDF, Word, PowerPoint, Excel, OpenDocument, RTF, text or code files, and zip files.`);
     }
     renderAttachments();
   }
@@ -516,10 +523,13 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Speech recognition error:", e.error);
       if (typeof showToast === 'function') {
         switch (e.error) {
-          case "aborted": showToast('Listening cancelled'); break;
-          case "no-speech": showToast('Didn\'t catch that — try again'); break;
-          case "not-allowed": showToast('Microphone access is blocked'); break;
-          default: showToast(`Error: ${e.error}`);
+          case "aborted": showToast("Listening was cancelled."); break;
+          case "no-speech": showToast("I didn't catch that. Please try again."); break;
+          case "not-allowed":
+          case "service-not-allowed": showToast("Microphone access is blocked. Allow it in your browser settings to use voice input."); break;
+          case "audio-capture": showToast("I can't find a microphone. Check that one is connected."); break;
+          case "network": showToast("Voice input needs an internet connection. Check your connection and try again."); break;
+          default: showToast("Voice input isn't working right now. Please try again.");
         }
       }
       micBtn.classList.remove("recording");
@@ -609,7 +619,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
       thinking.wrap.remove();
-      if (!data.imageUrl) { addMsg("ai", data.error || "Image generation failed. Please try again."); return; }
+      if (!data.imageUrl) { addMsg("ai", data.error || "I couldn't create that image. Please try again."); return; }
       const alt = prompt.replace(/[\[\]\r\n]+/g, " ").slice(0, 200);
       const url = data.imageUrl.replace(/\(/g, "%28").replace(/\)/g, "%29");
       const md = `![${alt}](${url})`;
@@ -618,7 +628,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.text.classList.remove("thinking");
-      thinking.text.textContent = "Error reaching the server. Is your backend running?";
+      thinking.text.textContent = SERVER_UNREACHABLE;
     }
   }
 
@@ -672,7 +682,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
       thinking.wrap.remove();
-      if (!data.imageUrl) { addMsg("ai", data.error || "Image editing failed. Please try again."); return; }
+      if (!data.imageUrl) { addMsg("ai", data.error || "I couldn't edit that image. Please try again."); return; }
       const alt = prompt.replace(/[\[\]\r\n]+/g, " ").slice(0, 200);
       const url = data.imageUrl.replace(/\(/g, "%28").replace(/\)/g, "%29");
       const md = `![${alt}](${url})`;
@@ -681,7 +691,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.text.classList.remove("thinking");
-      thinking.text.textContent = "Error reaching the server. Is your backend running?";
+      thinking.text.textContent = SERVER_UNREACHABLE;
     }
   }
 
@@ -772,13 +782,13 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
       thinking.wrap.remove();
-      const reply = data.reply || data.error || "Something went wrong.";
+      const reply = data.reply || data.error || SOMETHING_WRONG;
       addMsg("ai", reply);
       if (data.reply) history.push({ role: "assistant", content: reply });
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.wrap.remove();
-      addMsg("ai", "Error reaching the server. Is your backend running?");
+      addMsg("ai", SERVER_UNREACHABLE);
     }
   }
 
@@ -849,13 +859,13 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
       thinking.wrap.remove();
-      const reply = data.reply || data.error || "Something went wrong.";
+      const reply = data.reply || data.error || SOMETHING_WRONG;
       addMsg("ai", reply); // errors get a "Try again" button too
       if (data.reply) history.push({ role: "assistant", content: reply });
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.wrap.remove();
-      addMsg("ai", "Error reaching the server. Is your backend running?");
+      addMsg("ai", SERVER_UNREACHABLE);
     }
   }
 
@@ -871,7 +881,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({ messages: messagesForServer() }),
       });
       const out = await agent1102Stream.readReply(res, draft);
-      const reply = out.reply || out.error || "Something went wrong.";
+      const reply = out.reply || out.error || SOMETHING_WRONG;
 
       thinking.wrap.remove();
       addMsg("ai", reply); // errors get a "Try again" button too (they aren't stored in history)
@@ -883,7 +893,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.wrap.remove();
-      addMsg("ai", "Error reaching the server. Is your backend running?");
+      addMsg("ai", SERVER_UNREACHABLE);
     }
   }
 
@@ -986,7 +996,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const userContent = [];
       imgSrcs.forEach(url => userContent.push({ type: "image_url", image_url: { url } }));
-      userContent.push({ type: "text", text: modelText });
+      if (modelText) userContent.push({ type: "text", text: modelText }); // a photo with nothing typed has no text part at all
       history.push({ role: "user", content: hasImage ? userContent : modelText });
 
       input.value = "";
