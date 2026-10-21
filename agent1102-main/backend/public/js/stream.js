@@ -68,7 +68,7 @@
         else if (evt.type === "status") draft && draft.status(evt.text);
         else if (evt.type === "meta") meta = { ...(meta || {}), ...evt };
         else if (evt.type === "final") { reply = evt.reply; meta = { ...(meta || {}), ...(evt.meta || {}) }; }
-        else if (evt.type === "error") error = evt.error || "Something went wrong.";
+        else if (evt.type === "error") error = evt.error || "Something went wrong. Please try again.";
       }
     }
     if (!reply && !error) error = "The connection dropped before I finished. Please try again.";
