@@ -10,6 +10,7 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   const authPassword = document.getElementById("auth-password");
   const authSubmit = document.getElementById("auth-submit");
   const authToggle = document.getElementById("auth-toggle");
+  const authStay = document.getElementById("auth-stay"); // "Stay signed in" checkbox
   const authError = document.getElementById("auth-error");
   const authSubtitle = document.getElementById("auth-subtitle");
   const chatEl = document.getElementById("chat");
