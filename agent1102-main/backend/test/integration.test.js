@@ -21,6 +21,7 @@ const groqServer = http.createServer((req, res) => {
     const sys = (body.messages[0] && body.messages[0].content) || "";
     const last = body.messages[body.messages.length - 1].content;
     const lastText = typeof last === "string" ? last : "";
+    if (groqMode === "aierror") { res.writeHead(500, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: { message: "internal model_decommissioned xyz-secret-detail" } })); }
     if (groqMode === "ratelimit") { res.writeHead(429, { "Content-Type": "application/json", "x-ratelimit-reset-tokens": "1m5s" }); return res.end(JSON.stringify({ error: { code: "rate_limit_exceeded", message: "slow down" } })); }
     let content;
     if (/maintain a small long-term memory/.test(sys)) {
@@ -230,6 +231,38 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     const chatRes = await (await chat("hello", { token: TOKEN })).json();
     memoryTableMissing = false;
     assert(chatRes.reply);
+  });
+
+  console.log("\nattachments with no typed text; friendly errors");
+  await t("a photo with no text reaches the AI with no empty text part", async () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    const messages = [
+      { role: "user", content: [{ type: "image_url", image_url: { url: png } }] },                                   // what the page sends now
+      { role: "assistant", content: "ok" },
+      { role: "user", content: [{ type: "text", text: "" }, { type: "image_url", image_url: { url: png } }] },      // an old/other client's empty text part
+    ];
+    const before = groqCalls.length;
+    const res = await post("/chat", { messages }, { token: TOKEN, stream: true });
+    const events = await readSse(res);
+    assert(events.some(e => e.type === "final" || e.type === "delta"), "should get a normal reply, got " + JSON.stringify(events).slice(0, 200));
+    const sent = groqCalls.slice(before).find(c => c.stream);
+    assert(sent, "the chat request reached the AI");
+    for (const m of sent.messages) if (Array.isArray(m.content)) for (const part of m.content) assert(!(part.type === "text" && !String(part.text).trim()), "empty text part was sent to the AI");
+  });
+  await t("an AI failure shows plain words and never the AI service's own wording", async () => {
+    groqMode = "aierror";
+    const res = await post("/chat", { messages: [{ role: "user", content: "hello" }] }, { token: TOKEN, stream: true });
+    const ct = res.headers.get("content-type") || "";
+    const text = ct.includes("event-stream") ? JSON.stringify(await readSse(res)) : JSON.stringify(await res.json()); // fails before streaming = JSON, after = SSE
+    groqMode = "normal";
+    assert(!/xyz-secret-detail|model_decommissioned|AI error/.test(text), "leaked: " + text.slice(0, 200));
+    assert(/AI service had a problem/.test(text), "expected the friendly message, got: " + text.slice(0, 200));
+  });
+  await t("signing out of nothing: a request with no sign-in token gets a plain message", async () => {
+    const r = await post("/memory", {}, {});
+    const j = await r.json();
+    assert.strictEqual(r.status, 401);
+    assert.strictEqual(j.error, "Please sign in to continue.");
   });
 
   server.kill();
