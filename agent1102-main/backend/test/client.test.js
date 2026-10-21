@@ -15,7 +15,7 @@ const load = f => run(fs.readFileSync(path.join(__dirname, "..", "public", "js",
 run(`let history = []; let userToken = "tok"; const BACKEND_URL = "http://x"; let __toasts = []; function showToast(m){ __toasts.push(m); }
      window.__msgs = []; window.addMsg = function(role, text, img, idx){ const wrap = document.createElement("div"); wrap.innerHTML = '<button class="retry-btn"></button>'; window.__msgs.push({ role, text, idx, wrap }); return wrap; };
      window.__calls = [];`);
-load("stream.js"); load("personal.js"); load("tables.js");
+load("stream.js"); load("personal.js"); load("tables.js"); load("sendstate.js");
 
 let passed = 0;
 async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { console.log("  FAIL " + name + "\n       " + e.message); process.exitCode = 1; } }
@@ -122,6 +122,30 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
     await new Promise(r => setTimeout(r, 50));
     assert.strictEqual(chat.querySelectorAll(".msg-action-btn").length, 2);
     await new Promise(r => setTimeout(r, 50)); assert.strictEqual(chat.querySelectorAll(".msg-action-btn").length, 2, "must not duplicate");
+  });
+
+  console.log("sendstate.js");
+  await t("canSend: text alone, or an attachment alone, can be sent; blank text with nothing attached cannot", async () => {
+    const { canSend } = w.agent1102SendState;
+    assert.strictEqual(canSend("hello", 0), true);
+    assert.strictEqual(canSend("", 1), true, "a photo/file with nothing typed must send");
+    assert.strictEqual(canSend("   \n\t", 2), true, "attachment + blank text must send");
+    assert.strictEqual(canSend("", 0), false);
+    assert.strictEqual(canSend("   \u200b\u00a0\n", 0), false, "spaces / zero-width characters alone are not a message");
+    assert.strictEqual(canSend(undefined, 0), false);
+  });
+  await t("the Send button lights up when a file is attached with an empty box, and dims when it's removed", async () => {
+    const d2 = new JSDOM('<!doctype html><body><textarea id="input"></textarea><button id="send"></button><div id="attach-list"></div></body>', { pretendToBeVisual: true, runScripts: "outside-only" });
+    new vm.Script(fs.readFileSync(path.join(__dirname, "..", "public", "js", "sendstate.js"), "utf8")).runInContext(d2.getInternalVMContext());
+    d2.window.document.dispatchEvent(new d2.window.Event("DOMContentLoaded"));
+    const send = d2.window.document.getElementById("send"), list = d2.window.document.getElementById("attach-list");
+    assert(!send.classList.contains("send-ready"), "starts dim");
+    list.appendChild(d2.window.document.createElement("div"));
+    await new Promise(r => setTimeout(r, 20));
+    assert(send.classList.contains("send-ready"), "attachment only should light the button");
+    list.innerHTML = "";
+    await new Promise(r => setTimeout(r, 20));
+    assert(!send.classList.contains("send-ready"), "dims again when the attachment is removed");
   });
 
   console.log(`\n${passed} passed`);
