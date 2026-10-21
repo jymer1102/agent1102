@@ -148,5 +148,66 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
     assert(!send.classList.contains("send-ready"), "dims again when the attachment is removed");
   });
 
+  console.log("session.js (stay signed in)");
+  // a fresh browser-like page: seed(localStorage, sessionStorage) runs BEFORE session.js, like data left from earlier visits
+  const sessionPage = (seedLocal, seedTab) => {
+    const d = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/", pretendToBeVisual: true, runScripts: "outside-only" });
+    for (const [k, v] of Object.entries(seedLocal || {})) d.window.localStorage.setItem(k, v);
+    for (const [k, v] of Object.entries(seedTab || {})) d.window.sessionStorage.setItem(k, v);
+    new vm.Script(fs.readFileSync(path.join(__dirname, "..", "public", "js", "session.js"), "utf8")).runInContext(d.getInternalVMContext());
+    return d.window;
+  };
+  const LOGIN = { agent1102_token: "a", agent1102_refresh_token: "r" };
+  const minutesAgo = m => String(Date.now() - m * 60 * 1000);
+  await t("a login saved before this feature existed (no preference stored) is kept", async () => {
+    const win = sessionPage({ ...LOGIN, agent1102_last_seen: minutesAgo(600) });
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), "a");
+    assert.strictEqual(win.agent1102Session.stay(), true);
+    win.close();
+  });
+  await t("'Stay signed in' ticked: the login is kept even after a long gap", async () => {
+    const win = sessionPage({ ...LOGIN, agent1102_stay_signed_in: "1", agent1102_last_seen: minutesAgo(600) });
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), "a");
+    assert.strictEqual(win.localStorage.getItem("agent1102_refresh_token"), "r");
+    win.close();
+  });
+  await t("unticked + browser was closed (new tab, nothing seen for a while): the login is removed", async () => {
+    const win = sessionPage({ ...LOGIN, agent1102_stay_signed_in: "0", agent1102_last_seen: minutesAgo(10) });
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), null);
+    assert.strictEqual(win.localStorage.getItem("agent1102_refresh_token"), null);
+    win.close();
+  });
+  await t("unticked + another tab is open (seen seconds ago): a new tab stays signed in", async () => {
+    const win = sessionPage({ ...LOGIN, agent1102_stay_signed_in: "0", agent1102_last_seen: String(Date.now() - 10000) });
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), "a");
+    win.close();
+  });
+  await t("unticked + same tab reloaded after a long sleep: stays signed in", async () => {
+    const win = sessionPage({ ...LOGIN, agent1102_stay_signed_in: "0", agent1102_last_seen: minutesAgo(120) }, { agent1102_tab_alive: "1" });
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), "a");
+    win.close();
+  });
+  await t("begin() stores the choice, end() removes the saved login", async () => {
+    const win = sessionPage({ ...LOGIN });
+    win.agent1102Session.begin(false);
+    assert.strictEqual(win.agent1102Session.stay(), false);
+    assert(Number(win.localStorage.getItem("agent1102_last_seen")) > Date.now() - 5000, "records when it was last seen");
+    win.agent1102Session.begin(true);
+    assert.strictEqual(win.agent1102Session.stay(), true);
+    win.agent1102Session.end();
+    assert.strictEqual(win.localStorage.getItem("agent1102_token"), null);
+    assert.strictEqual(win.localStorage.getItem("agent1102_refresh_token"), null);
+    win.close();
+  });
+  await t("blocked storage never throws (private mode / strict settings)", async () => {
+    const d = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/", runScripts: "outside-only" });
+    Object.defineProperty(d.window, "localStorage", { get() { throw new Error("blocked"); } });
+    Object.defineProperty(d.window, "sessionStorage", { get() { throw new Error("blocked"); } });
+    new vm.Script(fs.readFileSync(path.join(__dirname, "..", "public", "js", "session.js"), "utf8")).runInContext(d.getInternalVMContext());
+    assert.strictEqual(d.window.agent1102Session.stay(), true);
+    d.window.agent1102Session.begin(false); d.window.agent1102Session.end();
+    d.window.close();
+  });
+
   console.log(`\n${passed} passed`);
 })();
