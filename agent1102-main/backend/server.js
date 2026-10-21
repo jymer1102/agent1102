@@ -74,6 +74,47 @@ const supabaseAdmin = createClient(
 
 const auth = createAuth(supabase); // verified-user lookup (cached), used by /chat, /memory and /prefs
 
+// ============================================================
+//  Messages people see
+//  Every { error } sent to the browser is written for the person using the app: what happened and what to
+//  try next. Technical detail (database / AI / service messages, setup instructions for the site owner) goes
+//  to the server log instead, never to the screen.
+// ============================================================
+const MSG = {
+  generic: "Something went wrong on our end. Please try again.",
+  signIn: "Please sign in to continue.",
+  session: "Your session has expired. Please sign in again.",
+  tooLarge: "That request is too large. Try something smaller.",
+  badRequest: "I couldn't read that request. Please try again.",
+};
+// Logs the real problem (when there is one) and answers with a message that is safe to show
+function fail(res, status, message, err) {
+  if (err) console.error(`Request failed (${status}):`, err && err.message ? err.message : err);
+  return res.status(status).json({ error: message });
+}
+// An Error whose message is already written for the person, so it may be shown as it is
+class UserError extends Error {}
+
+// Supabase's sign-in / sign-up / account errors in plain words (the original text goes to the log)
+function friendlyAuthError(error, fallback) {
+  const code = String((error && error.code) || "").toLowerCase();
+  const text = String((error && error.message) || "");
+  const has = re => re.test(text);
+  if (code === "invalid_credentials" || has(/invalid login credentials/i)) return "That email or password isn't right. Please try again.";
+  if (code === "email_not_confirmed" || has(/email not confirmed/i)) return "Please confirm your email first. Check your inbox for the confirmation link.";
+  if (code === "user_already_exists" || code === "email_exists" || has(/already (been )?registered|already exists/i)) return "An account with that email already exists. Try signing in instead.";
+  if (code === "weak_password" || has(/password should be at least|password is too|weak password/i)) {
+    const min = /at least (\d+) characters/i.exec(text);
+    return min ? `Your password needs to be at least ${min[1]} characters.` : "That password is too weak. Please choose a longer one.";
+  }
+  if (code === "same_password" || has(/different from the old password/i)) return "Your new password must be different from your current one.";
+  if (code === "email_address_invalid" || has(/unable to validate email|invalid format|email address .* is invalid/i)) return "That email address doesn't look right. Please check it and try again.";
+  if (code === "over_request_rate_limit" || code === "over_email_send_rate_limit" || (error && error.status === 429) || has(/rate limit|for security purposes/i)) return "Too many attempts. Please wait a minute and try again.";
+  if (code === "signup_disabled" || has(/signups? (not allowed|are disabled)/i)) return "New sign-ups are turned off right now.";
+  if (error) console.warn("Auth error shown as a generic message:", code || "(no code)", text);
+  return fallback;
+}
+
 // Fire-and-forget sanity check: confirms SUPABASE_URL/ANON/SERVICE keys are a
 // matching, valid set for the same project, and says so plainly in the logs
 // right away instead of waiting for someone's login to fail with a cryptic
@@ -128,11 +169,11 @@ async function getUsername(userId) {
 function highScoreRoute(table, label) {
   return async (req, res) => {
     const { score, token } = req.body;
-    if (!token || score == null) return res.status(400).json({ error: "Missing score or token" });
-    if (!Number.isInteger(score) || score < 0) return res.status(400).json({ error: "Score must be a whole number, 0 or higher" });
+    if (!token || score == null) return res.status(400).json({ error: "Your score couldn't be saved. Please sign in and try again." });
+    if (!Number.isInteger(score) || score < 0) return res.status(400).json({ error: "Scores must be a whole number, 0 or higher." });
 
     const userId = getUserIdFromToken(token);
-    if (!userId) return res.status(401).json({ error: "Invalid token" });
+    if (!userId) return res.status(401).json({ error: MSG.session });
 
     // only update if it's actually a new high score
     const { data: existing } = await supabaseAdmin
@@ -152,7 +193,7 @@ function highScoreRoute(table, label) {
       updated_at: new Date().toISOString()
     });
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return fail(res, 500, MSG.generic, error);
     res.json({ message: `${label} high score saved!` });
   };
 }
@@ -163,10 +204,10 @@ app.post("/pacman-score", highScoreRoute("pacman_highscores", "Pac-Man"));
 // Get profile (for displaying scores)
 app.get("/profile", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  if (!token) return res.status(401).json({ error: MSG.signIn });
 
   const userId = getUserIdFromToken(token);
-  if (!userId) return res.status(401).json({ error: "Invalid token" });
+  if (!userId) return res.status(401).json({ error: MSG.session });
 
   const [profileRes, trexRes, pacmanRes] = await Promise.all([
     supabaseAdmin.from("profiles").select("name, email, phone, avatar_url").eq("id", userId).maybeSingle(),
@@ -174,7 +215,7 @@ app.get("/profile", async (req, res) => {
     supabaseAdmin.from("pacman_highscores").select("high_score").eq("user_id", userId).maybeSingle(),
   ]);
 
-  if (profileRes.error) return res.status(500).json({ error: profileRes.error.message });
+  if (profileRes.error) return fail(res, 500, MSG.generic, profileRes.error);
   res.json({
     profile: {
       ...(profileRes.data || {}),
@@ -230,7 +271,7 @@ function prepareMessages(messages) {
   let seen = 0;
   const cleaned = messages.slice().reverse().map(m => {
     if (!m || !Array.isArray(m.content)) return m;
-    const parts = m.content.map(p => {
+    const parts = m.content.filter(p => !(p && p.type === "text" && !String(p.text == null ? "" : p.text).trim())).map(p => {
       if (p && p.type === "image_url") {
         const url = p.image_url && p.image_url.url;
         if (typeof url !== "string" || !url.startsWith("data:image/")) {
@@ -356,7 +397,7 @@ async function verifyAndRepair(reply, ctx) {
 }
 
 app.post("/chat", async (req, res) => {
-  if (!Array.isArray(req.body.messages)) return res.status(400).json({ error: "No messages provided" });
+  if (!Array.isArray(req.body.messages)) return res.status(400).json({ error: "There's nothing to send yet. Type a message and try again." });
   const sse = /text\/event-stream/i.test(req.headers.accept || "") ? openSse(res) : null;
   const status = text => { if (sse) sse.send({ type: "status", text }); };
 
@@ -396,7 +437,7 @@ app.post("/chat", async (req, res) => {
     if (search) {
       const quick = text => { if (sse) { sse.send({ type: "final", reply: text, meta: {} }); sse.end(); } else res.json({ reply: text, meta: {} }); };
       if (!user) return quick("Please sign in to use /search.");
-      if (!web.enabled()) return quick("Web search isn't turned on for this site yet (the site owner needs to add a search API key). You can still ask your question without /search and I'll answer from what I know.");
+      if (!web.enabled()) return quick("Web search isn't available right now. You can still ask your question without /search and I'll answer from what I know.");
       if (!search.query) return quick("Add a question after /search, for example: `/search latest Node.js LTS version`.");
       if (!searchLimiter.allow(user.id)) return quick(`You've used your ${SEARCH_PER_HOUR} web searches for this hour. Try again a bit later. Questions without /search still work.`);
       status("Searching the web...");
@@ -469,7 +510,7 @@ app.post("/chat", async (req, res) => {
     if (err && err.name === "AbortError") return; // the user left; nothing to send
     const known = err instanceof groq.GroqError;
     if (!known) console.error(err);
-    const message = known ? err.message : "Something went wrong";
+    const message = known ? err.message : MSG.generic;
     if (sse && sse.started) { sse.send({ type: "error", error: message }); sse.end(); }
     else res.status(known ? err.status : 500).json({ error: message });
   }
@@ -481,13 +522,13 @@ app.post("/chat", async (req, res) => {
 const prefsRows = style => prefsLib.describeStyle(style);
 app.get("/prefs", async (req, res) => {
   const user = await auth.verify(auth.bearer(req));
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   const style = prefsLib.readStyle(user.user_metadata);
   res.json({ style, rows: prefsRows(style) });
 });
 app.post("/prefs", async (req, res) => {
   const user = await auth.verify(auth.bearer(req));
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   let updates, notes = [];
   if (typeof req.body.command === "string") {
     const p = prefsLib.parseStyleArgs(req.body.command);
@@ -497,23 +538,23 @@ app.post("/prefs", async (req, res) => {
   } else if (req.body.updates && typeof req.body.updates === "object") {
     updates = prefsLib.cleanUpdates(req.body.updates);
   }
-  if (!updates || !Object.keys(updates).length) return res.status(400).json({ error: "Nothing to change" });
+  if (!updates || !Object.keys(updates).length) return res.status(400).json({ error: "There's nothing to change." });
   try {
     const style = await savePrefs(user, updates);
     res.json({ style, rows: prefsRows(style), notes });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 500, MSG.generic, e); }
 });
 
 // --- LONG-TERM MEMORY (what the assistant remembers about you; you can see and delete all of it) ---
 function memoryRoute(handler) {
   return async (req, res) => {
     const user = await auth.verify(auth.bearer(req));
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!user) return res.status(401).json({ error: MSG.signIn });
     try { await handler(req, res, user); }
     catch (e) {
-      if (e instanceof MemoryUnavailable) return res.status(503).json({ error: e.message });
+      if (e instanceof MemoryUnavailable) return res.status(503).json({ error: "Memory isn't available right now. Please try again later." });
       console.error("Memory route failed:", e && e.message ? e.message : e);
-      res.status(500).json({ error: "Something went wrong" });
+      res.status(500).json({ error: MSG.generic });
     }
   };
 }
@@ -552,8 +593,10 @@ async function groqStudy(system, user, { json, maxTokens }) {
   });
   const data = await response.json();
   if (!data.choices || !data.choices[0]) {
-    const err = new Error(data.error && data.error.message ? `AI error: ${String(data.error.message).slice(0, 300)}` : "No response from AI");
-    err.rate = data.error && data.error.code === "rate_limit_exceeded";
+    const info = groq.describeError(data, response); // logs the AI service's own wording, returns plain words
+    const err = new Error(info.message);
+    err.rate = info.status === 429;
+    err.ai = true;
     throw err;
   }
   return String(data.choices[0].message.content || "");
@@ -633,8 +676,10 @@ async function transcribeChunk(list, start) {
   });
   const data = await response.json();
   if (!data.choices || !data.choices[0]) {
-    const err = new Error(data.error && data.error.message ? `AI error: ${String(data.error.message).slice(0, 300)}` : "I couldn't read the image");
-    err.rate = data.error && data.error.code === "rate_limit_exceeded";
+    const info = groq.describeError(data, response);
+    const err = new Error(info.message);
+    err.rate = info.status === 429;
+    err.ai = true;
     throw err;
   }
   return String(data.choices[0].message.content || "").trim();
@@ -661,12 +706,12 @@ function htmlToText(html) {
 
 app.post("/study", async (req, res) => {
   const mode = String(req.body.mode || "");
-  if (!["learn", "quiz", "flashcards"].includes(mode)) return res.status(400).json({ error: "Unknown study mode" });
+  if (!["learn", "quiz", "flashcards"].includes(mode)) return res.status(400).json({ error: "I don't recognize that study command. Try /learn, /quiz or /flashcards." });
   let topic = clip(req.body.topic, 300);
   let material = String(req.body.material || "").slice(0, STUDY_MAX_MATERIAL);
   const context = String(req.body.context || "").slice(0, 12000);
   const images = Array.isArray(req.body.images) ? req.body.images : [];
-  if (!topic && !material.trim() && !context.trim() && !images.length) return res.status(400).json({ error: "Nothing to study yet" });
+  if (!topic && !material.trim() && !context.trim() && !images.length) return res.status(400).json({ error: "What should I study? Give me a topic or attach some notes, for example: /quiz 5 the French Revolution." });
 
   try {
     // A link as the topic: read that page and study it
@@ -688,9 +733,9 @@ app.post("/study", async (req, res) => {
       material = material.slice(0, STUDY_MAX_MATERIAL);
     }
   } catch (err) {
-    if (err.rate) return res.status(429).json({ error: "Token limit reached. Please try again in a minute." });
+    if (err.rate) return res.status(429).json({ error: err.message });
     console.error("Study prep error:", err);
-    return res.status(500).json({ error: err.message && /^AI error/.test(err.message) ? err.message : "Something went wrong" });
+    return res.status(500).json({ error: err.ai ? err.message : MSG.generic });
   }
   const count = Math.max(1, Math.min(parseInt(req.body.count, 10) || (mode === "quiz" ? 8 : 12), mode === "quiz" ? 20 : 40));
 
@@ -725,9 +770,9 @@ app.post("/study", async (req, res) => {
     if (!deck.title) deck.title = topic || "Flashcards";
     res.json({ reply: "Here are your flashcards. Tap a card to flip it.\n\n```flashcards\n" + JSON.stringify(deck) + "\n```" });
   } catch (err) {
-    if (err.rate) return res.status(429).json({ error: "Token limit reached. Please try again in a minute." });
+    if (err.rate) return res.status(429).json({ error: err.message });
     console.error("Study error:", err);
-    res.status(500).json({ error: err.message && /^AI error/.test(err.message) ? err.message : "Something went wrong" });
+    res.status(500).json({ error: err.ai ? err.message : MSG.generic });
   }
 });
 
@@ -842,15 +887,15 @@ const wantsMathVisual = t => {
 app.post("/graph", async (req, res) => {
   const request = clip(req.body.request, 1000);
   const context = String(req.body.context || "").slice(0, 6000);
-  if (!request && !context.trim()) return res.status(400).json({ error: "Tell me what to draw" });
+  if (!request && !context.trim()) return res.status(400).json({ error: "What should I draw? For example: /graph y = x^2 - 4." });
   try {
     const out = await generateMathVisual(request || "Draw the math from the conversation so far.", context);
     if (!out) return res.status(502).json({ error: "I couldn't draw that one. Try describing it a little differently, for example: y = x^2 - 4, or a number line for -2 < x <= 3." });
     res.json({ reply: (out.caption ? out.caption + "\n\n" : "") + out.block });
   } catch (err) {
-    if (err.rate) return res.status(429).json({ error: "Token limit reached. Please try again in a minute." });
+    if (err.rate) return res.status(429).json({ error: err.message });
     console.error("Graph error:", err);
-    res.status(500).json({ error: err.message && /^AI error/.test(err.message) ? err.message : "Something went wrong" });
+    res.status(500).json({ error: err.ai ? err.message : MSG.generic });
   }
 });
 
@@ -900,15 +945,15 @@ async function generateChatTitle(messages) {
 
 app.post("/title", async (req, res) => {
   if (!Array.isArray(req.body.messages) || !req.body.messages.length) {
-    return res.status(400).json({ error: "No messages provided" });
+    return res.status(400).json({ error: "There's nothing to send yet. Type a message and try again." });
   }
   try {
     res.json({ title: await generateChatTitle(req.body.messages) });
   } catch (err) {
-    if (err.status === 400 || err.status === 429) return res.status(err.status).json({ error: err.message });
-    if (err.status === 500) return res.status(500).json({ error: err.message });
+    if (err.status === 429) return res.status(429).json({ error: err.message });
+    if (err.status === 400) return res.status(400).json({ error: "There's nothing to title yet." });
     console.error(err);
-    res.status(500).json({ error: "Title generation failed" });
+    res.status(500).json({ error: "I couldn't write a title for this chat." });
   }
 });
 
@@ -998,8 +1043,8 @@ function parsePreview(html, finalUrl) {
 }
 app.get("/link-preview", async (req, res) => {
   let u;
-  try { u = new URL(String(req.query.url || "")); } catch (_) { return res.status(400).json({ error: "Invalid url" }); }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return res.status(400).json({ error: "Invalid url" });
+  try { u = new URL(String(req.query.url || "")); } catch (_) { return res.status(400).json({ error: "That link isn't valid." }); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return res.status(400).json({ error: "That link isn't valid." });
   const key = u.href;
   const hit = linkPreviewCache.get(key);
   if (hit && Date.now() - hit.at < LINK_PREVIEW_TTL) return res.json(hit.data);
@@ -1023,7 +1068,7 @@ app.get("/link-preview", async (req, res) => {
 // --- IMAGE GENERATION ---
 app.post("/generate-image", async (req, res) => {
   const { prompt } = req.body;
-  if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "No prompt provided" });
+  if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
   try {
     // encodeURIComponent leaves ! ' ( ) * alone; encode them too so the URL can't break markdown
     const encoded = encodeURIComponent(prompt.trim().slice(0, 500)).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
@@ -1032,7 +1077,7 @@ app.post("/generate-image", async (req, res) => {
     res.json({ imageUrl });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Image generation failed" });
+    res.status(500).json({ error: "I couldn't create that image. Please try again." });
   }
 });
 
@@ -1071,33 +1116,34 @@ async function loadEditSource({ imageUrl, imageBase64 }) {
   let buf;
   if (typeof imageBase64 === "string" && imageBase64) {
     const m = /^data:image\/(?:jpeg|png|webp);base64,([a-zA-Z0-9+/=]+)$/.exec(imageBase64);
-    if (!m) throw new Error("Attached image isn't a supported format (JPG, PNG, or WEBP).");
+    if (!m) throw new UserError("That image isn't a supported type. Please use a JPG, PNG or WEBP image.");
     buf = Buffer.from(m[1], "base64");
   } else {
     let u;
-    try { u = new URL(imageUrl); } catch (_) { throw new Error("Invalid image URL."); }
+    try { u = new URL(imageUrl); } catch (_) { throw new UserError("I couldn't find that image to edit. Attach it again and try again."); }
     const ownHost = new URL(process.env.SUPABASE_URL).hostname;
     const okHost = u.protocol === "https:" && (u.hostname === "image.pollinations.ai" || u.hostname === "media.pollinations.ai" || u.hostname === "gen.pollinations.ai" || u.hostname === ownHost);
-    if (!okHost) throw new Error("I can only edit images from this chat.");
+    if (!okHost) throw new UserError("I can only edit images from this chat.");
     const r = await fetch(u, { signal: AbortSignal.timeout(60000) });
-    if (!r.ok) throw new Error(`Couldn't load the image to edit (${r.status}).`);
+    if (!r.ok) throw new UserError("I couldn't load that image to edit it. Attach it again and try again.");
     buf = Buffer.from(await r.arrayBuffer());
   }
-  if (buf.length > EDIT_MAX_BYTES) throw new Error(`Image is too large. Max ${EDIT_MAX_BYTES / 1024 / 1024}MB.`);
+  if (buf.length > EDIT_MAX_BYTES) throw new UserError(`That image is too large. Images can be up to ${EDIT_MAX_BYTES / 1024 / 1024} MB.`);
   const mime = sniffImageMime(buf);
-  if (!mime) throw new Error("That doesn't look like a JPG, PNG, or WEBP image.");
+  if (!mime) throw new UserError("That file doesn't look like a JPG, PNG or WEBP image.");
   return { buf, mime };
 }
 
 app.post("/edit-image", async (req, res) => {
   const { prompt, imageUrl, imageBase64 } = req.body;
-  if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "No prompt provided" });
+  if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
   if (typeof imageUrl !== "string" && typeof imageBase64 !== "string") {
-    return res.status(400).json({ error: "No image provided to edit" });
+    return res.status(400).json({ error: "Attach an image to edit, or create one first with /image." });
   }
   const key = (process.env.POLLINATIONS_API_KEY || "").trim();
   if (!key) {
-    return res.status(503).json({ error: "Image editing isn't set up yet: the server needs a POLLINATIONS_API_KEY (free at enter.pollinations.ai)." });
+    console.warn("Image editing is off: set POLLINATIONS_API_KEY (free at enter.pollinations.ai).");
+    return res.status(503).json({ error: "Image editing isn't available right now." });
   }
   try {
     const src = await loadEditSource({ imageUrl, imageBase64 });
@@ -1118,7 +1164,8 @@ app.post("/edit-image", async (req, res) => {
     if (!r.ok) {
       const detail = (json && (json.error && (json.error.message || json.error))) || raw.slice(0, 200);
       console.error("Pollinations edit failed:", r.status, raw.slice(0, 500));
-      return res.status(502).json({ error: `Image edit service error (${r.status}). ${typeof detail === "string" ? detail.slice(0, 160) : ""}`.trim() });
+      console.error("Pollinations edit detail:", typeof detail === "string" ? detail.slice(0, 160) : "");
+      return res.status(502).json({ error: "The image editor had a problem. Please try again in a moment." });
     }
 
     const item = json && Array.isArray(json.data) ? json.data[0] : null;
@@ -1130,7 +1177,7 @@ app.post("/edit-image", async (req, res) => {
       out = Buffer.from(await ir.arrayBuffer());
     } else {
       console.error("Unexpected edit response:", raw.slice(0, 500));
-      return res.status(502).json({ error: "The image edit service returned no image." });
+      return res.status(502).json({ error: "The image editor didn't return a picture. Please try again." });
     }
 
     const mime = sniffImageMime(out) || "image/png";
@@ -1141,7 +1188,7 @@ app.post("/edit-image", async (req, res) => {
     res.json({ imageUrl: publicUrl });
   } catch (err) {
     console.error("Image edit failed:", err);
-    res.status(500).json({ error: (err && err.message) || "Image editing failed" });
+    res.status(500).json({ error: err instanceof UserError ? err.message : "I couldn't edit that image. Please try again." });
   }
 });
 
@@ -1152,7 +1199,7 @@ const TTS_VOICE_ID = process.env.TTS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM"; // "Rac
 const TTS_MODEL = process.env.TTS_MODEL || "eleven_flash_v2_5"; // low-latency model; good fit for a chat reply
 app.post("/tts", async (req, res) => {
   const { text } = req.body;
-  if (typeof text !== "string" || !text.trim()) return res.status(400).json({ error: "No text provided" });
+  if (typeof text !== "string" || !text.trim()) return res.status(400).json({ error: "There's nothing to read aloud." });
   if (!process.env.ELEVENLABS_API_KEY) {
     // Not a user-facing failure: the client treats this as "not set up yet" and
     // quietly uses the browser's built-in voice instead.
@@ -1176,28 +1223,29 @@ app.post("/tts", async (req, res) => {
       if (response.status === 401) { console.error("ElevenLabs: invalid API key"); return res.status(501).json({ error: "tts_not_configured" }); }
       if (response.status === 429) return res.status(429).json({ error: "Read-aloud has used up its monthly quota. It'll fall back to your device's own voice for now." });
       console.error("ElevenLabs error:", response.status, detail);
-      return res.status(500).json({ error: "Couldn't generate audio" });
+      return res.status(500).json({ error: "I couldn't read this aloud." });
     }
     res.setHeader("Content-Type", "audio/mpeg");
     const buf = Buffer.from(await response.arrayBuffer());
     res.send(buf);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Couldn't generate audio" });
+    res.status(500).json({ error: "I couldn't read this aloud." });
   }
 });
 
 // --- AUTH ---
 app.post("/auth/refresh", async (req, res) => {
   const { refresh_token } = req.body;
-  if (!refresh_token) return res.status(401).json({ error: "Missing refresh token" });
+  if (!refresh_token) return res.status(401).json({ error: MSG.session });
   const { data, error } = await supabase.auth.refreshSession({ refresh_token });
   if (error) {
     // 401 = Supabase rejected the token (expired, already used, revoked): the saved login is dead and the
     // user has to sign in again. Anything else (network blip, Supabase 5xx, rate limit) is temporary, so
     // answer 503 and the client keeps the saved login and retries later instead of signing the user out.
     const rejected = error.status >= 400 && error.status < 500 && error.status !== 429;
-    return res.status(rejected ? 401 : 503).json({ error: error.message });
+    if (!rejected) console.error("Session refresh failed:", error.message);
+    return res.status(rejected ? 401 : 503).json({ error: rejected ? MSG.session : "I couldn't refresh your session right now. Please try again in a moment." });
   }
   res.json({ session: data.session });
 });
@@ -1207,7 +1255,7 @@ app.post("/auth/update", async (req, res) => {
   const { name, email, password } = req.body;
   const { data: userData, error: authErr } = await supabase.auth.getUser(token);
   if (authErr || !userData.user) {
-    return res.status(401).json({ error: "Unauthorized — token may be expired. Try logging out and back in." });
+    return res.status(401).json({ error: MSG.session });
   }
   const user = userData.user;
   const updates = {};
@@ -1215,7 +1263,7 @@ app.post("/auth/update", async (req, res) => {
   if (password) updates.password = password;
   if (name) updates.data = { ...user.user_metadata, name };
   const { data, error } = await supabaseAdmin.auth.admin.updateUserById(user.id, updates);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(error.status && error.status < 500 ? 400 : 500).json({ error: friendlyAuthError(error, "I couldn't save those changes. Please try again.") });
 
   // keep profiles table in sync
   if (name || email) {
@@ -1264,13 +1312,13 @@ async function eggUser(req) {
 
 app.get("/easter-eggs", async (req, res) => {
   const user = await eggUser(req);
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   res.json({ eggs: readEggs(user.user_metadata) });
 });
 
 app.post("/easter-eggs", async (req, res) => {
   const user = await eggUser(req);
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   const current = readEggs(user.user_metadata);
   const incoming = req.body?.eggs || {};
   const merged = {
@@ -1285,7 +1333,7 @@ app.post("/easter-eggs", async (req, res) => {
     const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
       user_metadata: { ...user.user_metadata, easter_eggs: merged },
     });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return fail(res, 500, MSG.generic, error);
   }
   res.json({ eggs: merged });
 });
@@ -1318,25 +1366,25 @@ app.post("/auth/avatar",
   express.raw({ type: Object.keys(AVATAR_TYPES), limit: AVATAR_MAX_BYTES }),
   async (req, res) => {
     const token = req.headers.authorization?.split(" ")[1];
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+    if (!token) return res.status(401).json({ error: MSG.signIn });
     const { data: userData, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !userData.user) {
-      return res.status(401).json({ error: "Unauthorized — token may be expired. Try logging out and back in." });
+      return res.status(401).json({ error: MSG.session });
     }
     const userId = userData.user.id;
 
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: "Send the image file as the request body (JPG, PNG, or WEBP)." });
+      return res.status(400).json({ error: "Choose a JPG, PNG or WEBP picture to upload." });
     }
     const contentType = sniffImageType(req.body);
-    if (!contentType) return res.status(400).json({ error: "Only JPG, PNG, and WEBP images are allowed." });
+    if (!contentType) return res.status(400).json({ error: "Profile pictures must be JPG, PNG or WEBP images." });
 
     // A new filename per upload means the CDN/browser never serves a stale picture.
     const filePath = `${userId}/avatar-${Date.now()}.${AVATAR_TYPES[contentType]}`;
     const { error: uploadErr } = await supabaseAdmin.storage
       .from(AVATAR_BUCKET)
       .upload(filePath, req.body, { contentType, cacheControl: "31536000", upsert: false });
-    if (uploadErr) return res.status(500).json({ error: uploadErr.message });
+    if (uploadErr) return fail(res, 500, MSG.generic, uploadErr);
 
     const avatar_url = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(filePath).data.publicUrl;
     const { error: dbErr } = await supabaseAdmin
@@ -1344,7 +1392,7 @@ app.post("/auth/avatar",
       .upsert({ id: userId, avatar_url, updated_at: new Date().toISOString() });
     if (dbErr) {
       await supabaseAdmin.storage.from(AVATAR_BUCKET).remove([filePath]);
-      return res.status(500).json({ error: dbErr.message });
+      return fail(res, 500, MSG.generic, dbErr);
     }
 
     // Only one picture per user is kept, so storage doesn't grow with every change.
@@ -1356,14 +1404,14 @@ app.post("/auth/avatar",
 app.delete("/auth/delete", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
   const { data: userData, error: authErr } = await supabase.auth.getUser(token);
-  if (authErr || !userData.user) return res.status(401).json({ error: "Unauthorized" });
+  if (authErr || !userData.user) return res.status(401).json({ error: MSG.signIn });
   const userId = userData.user.id;
   await supabaseAdmin.from("chats").delete().eq("user_id", userId);
   await supabaseAdmin.from("user_memories").delete().eq("user_id", userId).then(() => {}, () => {}); // ignore if memory.sql was never run
   await removeUserAvatars(userId).catch(err => console.warn("Avatar cleanup failed:", err.message));
   await supabaseAdmin.from("profiles").delete().eq("id", userId);
   const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return fail(res, 500, MSG.generic, error);
   res.json({ success: true });
 });
 
@@ -1373,7 +1421,7 @@ app.get("/auth/oauth/:provider", async (req, res) => {
     provider,
     options: { redirectTo: `${process.env.SITE_URL || "https://agent1102.onrender.com"}/auth/callback` }
   });
-  if (error) return res.status(400).json({ error: error.message });
+  if (error) return fail(res, 400, "I couldn't start that sign-in. Please try again.", error);
   res.redirect(data.url);
 });
 
@@ -1406,7 +1454,7 @@ app.post("/auth/signup", async (req, res) => {
     });
     if (error) {
       console.log(`SIGNUP ERROR MESSAGE: ${error.message} (status ${error.status})`);
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: friendlyAuthError(error, "I couldn't create your account. Please check your details and try again.") });
     }
     // If "Confirm email" is enabled in Supabase's Auth settings (the default for
     // new projects), signUp succeeds but issues no session until the user clicks
@@ -1418,7 +1466,7 @@ app.post("/auth/signup", async (req, res) => {
     res.json({ user: data.user, session: data.session });
   } catch (err) {
     console.error("Signup failed:", err);
-    res.status(500).json({ error: "Signup failed. Check server logs for details." });
+    res.status(500).json({ error: "I couldn't create your account right now. Please try again in a moment." });
   }
 });
 
@@ -1429,12 +1477,12 @@ app.post("/auth/login", async (req, res) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       console.log(`LOGIN ERROR MESSAGE: ${error.message} (status ${error.status})`);
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: friendlyAuthError(error, "I couldn't sign you in. Please check your details and try again.") });
     }
     res.json({ user: data.user, session: data.session });
   } catch (err) {
     console.error("Login failed:", err);
-    res.status(500).json({ error: "Login failed. Check server logs for details." });
+    res.status(500).json({ error: "I couldn't sign you in right now. Please try again in a moment." });
   }
 });
 
@@ -1467,13 +1515,13 @@ async function verifiedUserId(req) {
 
 app.post("/chats", async (req, res) => {
   const { id, title, history } = req.body;
-  if (!id || !Array.isArray(history)) return res.status(400).json({ error: "Missing chat id or history" });
+  if (!id || !Array.isArray(history)) return res.status(400).json({ error: "I couldn't save this chat. Please try again." });
   const authHeader = req.headers.authorization;
   const token = req.body.token || (authHeader && authHeader.split(" ")[1]);
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  if (!token) return res.status(401).json({ error: MSG.signIn });
   try {
     const userId = getUserIdFromToken(token);
-    if (!userId) return res.status(401).json({ error: "Invalid token" });
+    if (!userId) return res.status(401).json({ error: MSG.session });
     const info = await getUserInfo(userId);
     const now = new Date().toISOString();
     const row = {
@@ -1495,17 +1543,17 @@ app.post("/chats", async (req, res) => {
       console.warn("WARNING: chats table is missing username/email/phone/updated_at. Run supabase/chats.sql in the Supabase SQL editor. Saving without them for now.");
       ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
     }
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return fail(res, 500, MSG.generic, error);
     res.json({ success: true });
   } catch (err) {
     console.error("Save chat failed:", err);
-    res.status(500).json({ error: "Something went wrong" });
+    res.status(500).json({ error: MSG.generic });
   }
 });
 
 app.get("/chats", async (req, res) => {
   const user = await auth.verify(auth.bearer(req));
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   const userId = user.id;
   const locked = new Set(lockedChatIds(user));
   const withLock = rows => (rows || []).map(c => ({ ...c, title_locked: locked.has(c.id) }));
@@ -1515,7 +1563,7 @@ app.get("/chats", async (req, res) => {
   if (error) {
     // Older table without the new columns: fall back to select("*")
     const legacy = await supabaseAdmin.from("chats").select("*").eq("user_id", userId).order("created_at", { ascending: false });
-    if (legacy.error) return res.status(500).json({ error: legacy.error.message });
+    if (legacy.error) return fail(res, 500, MSG.generic, legacy.error);
     return res.json({ chats: withLock(legacy.data) });
   }
   res.json({ chats: withLock(data) });
@@ -1526,7 +1574,7 @@ app.get("/chats", async (req, res) => {
 //                { title, locked: false }     -> sets this title but leaves the chat on automatic naming
 app.patch("/chats/:id", async (req, res) => {
   const user = await auth.verify(auth.bearer(req));
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user) return res.status(401).json({ error: MSG.signIn });
   const id = String(req.params.id || "");
 
   // { auto: true }: the person left the name empty, so the AI writes one (from the saved conversation) and the
@@ -1541,7 +1589,7 @@ app.patch("/chats/:id", async (req, res) => {
       catch (e) {
         if (e.status === 429) return res.status(429).json({ error: e.message });
         console.warn("Auto title for rename failed:", e && e.message ? e.message : e);
-        return res.status(502).json({ error: "Couldn't write a title right now. Try again in a moment." });
+        return res.status(502).json({ error: "I couldn't write a title right now. Please try again in a moment." });
       }
       const { error } = await supabaseAdmin.from("chats").update({ title }).eq("id", id).eq("user_id", user.id);
       if (error) throw new Error(error.message);
@@ -1549,7 +1597,7 @@ app.patch("/chats/:id", async (req, res) => {
       return res.json({ success: true, title, locked: false });
     } catch (e) {
       console.error("Rename chat (auto) failed:", e && e.message ? e.message : e);
-      return res.status(500).json({ error: "Couldn't rename the chat." });
+      return res.status(500).json({ error: "I couldn't rename that chat. Please try again." });
     }
   }
 
@@ -1568,15 +1616,15 @@ app.patch("/chats/:id", async (req, res) => {
     res.json({ success: true, title, locked });
   } catch (e) {
     console.error("Rename chat failed:", e && e.message ? e.message : e);
-    res.status(500).json({ error: "Couldn't rename the chat." });
+    res.status(500).json({ error: "I couldn't rename that chat. Please try again." });
   }
 });
 
 app.delete("/chats/:id", async (req, res) => {
   const userId = await verifiedUserId(req);
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!userId) return res.status(401).json({ error: MSG.signIn });
   const { error } = await supabaseAdmin.from("chats").delete().eq("id", req.params.id).eq("user_id", userId);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return fail(res, 500, MSG.generic, error);
   const user = await auth.verify(auth.bearer(req));
   if (user && lockedChatIds(user).includes(req.params.id)) await setChatLocked(userId, req.params.id, false).catch(() => {});
   res.json({ success: true });
@@ -1584,9 +1632,9 @@ app.delete("/chats/:id", async (req, res) => {
 
 app.delete("/chats", async (req, res) => {
   const userId = await verifiedUserId(req);
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!userId) return res.status(401).json({ error: MSG.signIn });
   const { error } = await supabaseAdmin.from("chats").delete().eq("user_id", userId);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return fail(res, 500, MSG.generic, error);
   await patchUserMetadata(userId, { renamed_chats: [] }).catch(() => {});
   res.json({ success: true });
 });
@@ -1595,12 +1643,13 @@ app.delete("/chats", async (req, res) => {
 app.use((err, req, res, next) => {
   if (err.type === "entity.too.large") {
     const msg = req.path === "/auth/avatar"
-      ? `File too big! Max ${AVATAR_MAX_BYTES / 1024 / 1024}MB.`
-      : "Request too large.";
+      ? `That picture is too big. Profile pictures can be up to ${AVATAR_MAX_BYTES / 1024 / 1024} MB.`
+      : MSG.tooLarge;
     return res.status(413).json({ error: msg });
   }
+  if (err.type === "entity.parse.failed") return res.status(400).json({ error: MSG.badRequest });
   console.error(err);
-  res.status(err.status || 500).json({ error: "Something went wrong" });
+  res.status(err.status || 500).json({ error: MSG.generic });
 });
 
 // --- SELF KEEP-ALIVE ---
