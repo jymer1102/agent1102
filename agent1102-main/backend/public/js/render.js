@@ -265,7 +265,7 @@
 
     copyBtn.addEventListener("click", async () => {
       if (await copyText(shown)) flash(copyBtn, "fa-copy", "Copy", "Copied");
-      else toast("Couldn't copy — your browser blocked it");
+      else toast("I couldn't copy that. Your browser blocked it.");
     });
     dlBtn.addEventListener("click", () => {
       const ext = FILE_EXT[cleanLang] || "txt";
@@ -335,7 +335,7 @@
     const box = el("div", "study-block mathviz-block");
     box.textContent = "Drawing...";
     ensureMathViz().then(mv => { box.replaceWith(mv.build(text)); scrollChat(); })
-      .catch(err => { box.className = "study-block study-error"; box.textContent = "Couldn't draw this graph: " + err.message + ". Make sure mathviz.js is uploaded to backend/public/js/ on your server, then redeploy and refresh."; });
+      .catch(err => { console.error("Graph drawing failed:", err); box.className = "study-block study-error"; box.textContent = "I couldn't draw this graph. Refresh the page and try again."; });
     return box;
   }
   const TYPE_MAP = {
@@ -581,7 +581,7 @@
 
   function chartError(rawText, message) {
     const box = el("div", "chart-error");
-    box.innerHTML = `<div class="chart-error-msg"><i class="fa-solid fa-triangle-exclamation"></i> Couldn't draw this chart: ${escapeHtml(message)}</div>`;
+    box.innerHTML = `<div class="chart-error-msg"><i class="fa-solid fa-triangle-exclamation"></i> I couldn't draw this chart: ${escapeHtml(message)}</div>`;
     box.appendChild(buildCodeBlock(rawText, "json"));
     return box;
   }
@@ -591,10 +591,10 @@
     try {
       spec = normalizeChartSpec(JSON.parse(rawText));
     } catch (e) {
-      return chartError(rawText, e instanceof SyntaxError ? "the chart data wasn't valid JSON." : e.message);
+      return chartError(rawText, e instanceof SyntaxError ? "the chart data was incomplete or malformed." : e.message);
     }
     if (typeof Chart === "undefined") {
-      return chartError(rawText, "the chart library didn't load. Check your connection and refresh.");
+      return chartError(rawText, "the chart library didn't load. Check your connection and refresh the page.");
     }
 
     const block = el("div", "chart-block");
@@ -668,7 +668,7 @@
     im.addEventListener("error", () => {
       frame.classList.remove("loading");
       frame.classList.add("failed");
-      status.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> <span>Couldn\'t load the image. The free image service allows roughly one image every 15 seconds, so wait a moment and try again.</span>';
+      status.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> <span>I couldn\'t load the image. The free image service allows about one image every 15 seconds, so wait a moment and try again.</span>';
       const retry = makeBtn("code-btn", "fa-rotate-right", "Try again", "Try again");
       retry.addEventListener("click", () => { attempt++; load(); });
       status.appendChild(retry);
@@ -793,7 +793,7 @@
       span.innerHTML = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(html) : html;
     } catch (e) {
       span.className += " math-error";
-      span.title = e && e.message ? e.message : "Couldn't parse this formula";
+      span.title = "I couldn't display this formula.";
       span.textContent = display ? `$$${tex}$$` : `(${tex})`;
     }
     return span;
@@ -1267,7 +1267,7 @@
     const sameButton = ttsBtn === btn;
     stopTTS(); // synchronous: cancels anything playing, no delay before what follows
     if (sameButton) return;
-    if (!text) { toast("Nothing to read aloud in this reply"); return; }
+    if (!text) { toast("There's nothing to read aloud in this reply."); return; }
 
     unlockAudioElement(); // still synchronous, still inside this click
 
@@ -1307,7 +1307,7 @@
           return;
         }
         if (!res.ok) {
-          let msg = "Couldn't read this aloud.";
+          let msg = "I couldn't read this aloud.";
           try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
           if (res.status === 429) {
             // Monthly quota used up: tell the person once, then fall back for the rest.
@@ -1324,7 +1324,7 @@
           // A 200 response that isn't actually audio (a proxy hiccup, an
           // unrelated catch-all route) — treat like any other failure rather
           // than trying to "play" it, which would just error out noisily.
-          throw new Error("Couldn't read this aloud.");
+          throw new Error("I couldn't read this aloud.");
         }
 
         serverTTSAvailable = true;
@@ -1337,14 +1337,14 @@
           URL.revokeObjectURL(url);
           if (session !== ttsSession) return;
           stopTTS();
-          toast("Couldn't read this aloud.");
+          toast("I couldn't read this aloud.");
         };
         setBtn(btn, "fa-stop");
         el.play().catch(() => {
           URL.revokeObjectURL(url);
           if (session !== ttsSession) return;
           stopTTS();
-          toast("Couldn't read this aloud. Try tapping the button again.");
+          toast("I couldn't read this aloud. Try tapping the button again.");
         });
       }).catch(() => {
         // Network hiccup reaching our own server: fall back for this reply
@@ -1397,7 +1397,7 @@
       const watchdog = setTimeout(() => {
         if (started || session !== ttsSession) return;
         stopTTS();
-        toast("Couldn't read this aloud. Your browser or device may not have a voice installed.");
+        toast("I couldn't read this aloud. Your browser or device may not have a voice installed.");
       }, 5000);
       u.onstart = () => { started = true; clearTimeout(watchdog); setBtn(btn, "fa-stop"); };
       u.onend = () => { clearTimeout(watchdog); i++; speakNext(); };
@@ -1407,7 +1407,7 @@
         // "interrupted"/"canceled" just mean something else stopped this utterance on purpose
         if (e && (e.error === "interrupted" || e.error === "canceled")) return;
         stopTTS();
-        toast("Couldn't read this aloud. Your browser or device may not have a voice installed.");
+        toast("I couldn't read this aloud. Your browser or device may not have a voice installed.");
       };
       try {
         speechSynthesis.speak(u);
@@ -1416,7 +1416,7 @@
         // without this, that exception would silently kill read-aloud entirely.
         clearTimeout(watchdog);
         stopTTS();
-        toast("Couldn't read this aloud. Your browser or device may not have a voice installed.");
+        toast("I couldn't read this aloud. Your browser or device may not have a voice installed.");
       }
     };
     speakNext();
@@ -1495,7 +1495,7 @@
         const copyBtn = makeBtn("msg-action-btn", "fa-copy", "", "Copy message");
         copyBtn.addEventListener("click", async () => {
           if (await copyText(shown)) flash(copyBtn, "fa-copy", "", "");
-          else toast("Couldn't copy — your browser blocked it");
+          else toast("I couldn't copy that. Your browser blocked it.");
         });
         actions.appendChild(copyBtn);
 
@@ -1530,7 +1530,7 @@
       ttsButton.addEventListener("click", () => toggleTTS(ttsButton, speakableText(content)));
       copyBtn.addEventListener("click", async () => {
         if (await copyText(responseToText(content))) flash(copyBtn, "fa-copy", "", "");
-        else toast("Couldn't copy — your browser blocked it");
+        else toast("I couldn't copy that. Your browser blocked it.");
       });
       dlBtn.addEventListener("click", () => {
         downloadFile(`agent1102-response-${timestamp()}.md`, responseToText(content) + "\n", "text/markdown;charset=utf-8");
