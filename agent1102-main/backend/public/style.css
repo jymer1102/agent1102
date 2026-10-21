@@ -25,7 +25,10 @@ body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var
 .auth-box button.primary { padding:0.75rem; border-radius:10px; border:none; background:var(--accent); color:white; font-size:1rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; width:100%; font-family:'Inter',sans-serif; }
 
 .auth-toggle { background:none; border:none; color:var(--accent); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.9rem; text-align:center; font-family:'Inter',sans-serif; }
-.auth-error { font-size:0.85rem; text-align:center; }
+.auth-error { font-size:0.85rem; text-align:center; color:#ff6b6d; }
+.light .auth-error { color:#c0282a; }
+.auth-error.info { color:#2ecc71; }
+.light .auth-error.info { color:#1e8449; }
 #app { display:none; flex-direction:column; height:100vh; }
 header { padding:0.75rem 1rem; background:var(--surface); display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
 .header-title { font-size:1.1rem; font-weight:600; cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; user-select:none; pointer-events:none; } /* plain text, not clickable */
