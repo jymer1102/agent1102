@@ -13,14 +13,17 @@
   const auth = extra => ({ "Authorization": `Bearer ${userToken}`, ...(extra || {}) });
 
   async function api(method, path, body) {
-    const res = await fetch(`${BACKEND_URL}${path}`, {
-      method,
-      headers: auth(body ? { "Content-Type": "application/json" } : null),
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(`${BACKEND_URL}${path}`, {
+        method,
+        headers: auth(body ? { "Content-Type": "application/json" } : null),
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (_) { throw new Error("I can't reach the server right now. Check your connection and try again."); }
     let data = {};
     try { data = await res.json(); } catch (_) {}
-    if (!res.ok) throw new Error(data.error || "Something went wrong.");
+    if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
     return data;
   }
 
@@ -95,7 +98,7 @@
         show("ai", head + styleTable(d.rows) + "\n\n" + STYLE_HELP);
       }
     } catch (e) {
-      show("ai", e.message || "Something went wrong.");
+      show("ai", e.message || "Something went wrong. Please try again.");
     }
     return true;
   }
