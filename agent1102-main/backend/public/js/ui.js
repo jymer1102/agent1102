@@ -118,7 +118,7 @@
           body: JSON.stringify(auto ? { auto: true } : { title: typed }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Couldn't rename the chat.");
+        if (!res.ok) throw new Error(data.error || "I couldn't rename that chat. Please try again.");
         chat.title = data.title; chat.title_locked = data.locked;
         if (chat.id === currentChatId) {
           currentChatTitleLocked = data.locked;
@@ -128,7 +128,7 @@
         }
       } catch (e) {
         // Nothing was changed on the server, so the old name simply comes back
-        if (typeof showToast === "function") showToast(agent1102Render.escapeHtml(e.message || "Couldn't rename the chat."));
+        if (typeof showToast === "function") showToast(agent1102Render.escapeHtml(e instanceof TypeError ? "I can't reach the server right now. Check your connection and try again." : (e.message || "I couldn't rename that chat. Please try again.")));
       }
       renderSidebar(chats);
     }
