@@ -9,6 +9,7 @@ const assert = require("assert");
 
 const GROQ_PORT = 4101, SB_PORT = 4102, APP_PORT = 4100;
 const b64 = o => Buffer.from(JSON.stringify(o)).toString("base64url");
+let chatRows = [{ id: "1700000000000", user_id: "22222222-2222-4222-8222-222222222222", title: "Someone else's chat", history: [{ role: "user", content: "private" }] }];
 const TOKEN = `${b64({ alg: "HS256" })}.${b64({ sub: "11111111-1111-4111-8111-111111111111", exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
 const USER = { id: "11111111-1111-4111-8111-111111111111", email: "a@b.c", user_metadata: { name: "Sam" } };
 
@@ -51,10 +52,17 @@ const sbServer = http.createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     const json = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
     const bearer = (req.headers.authorization || "").split(" ")[1];
+    if (url.pathname === "/auth/v1/token") return json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
     if (url.pathname === "/auth/v1/user") return bearer === TOKEN ? json(200, USER) : json(401, { message: "bad jwt" });
+    if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "GET") return json(200, USER); // getUserById: the server reads the current metadata before changing it
     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "PUT") { const b = JSON.parse(raw); adminUpdates.push(b); USER.user_metadata = b.user_metadata || USER.user_metadata; return json(200, USER); }
     if (url.pathname === "/auth/v1/admin/users") return json(200, { users: [] });
     if (url.pathname === "/storage/v1/bucket") return json(200, {});
+    if (url.pathname === "/rest/v1/chats") {
+      const match = row => [...url.searchParams].every(([k, v]) => !/^(eq|neq)\./.test(v) || (v.startsWith("eq.") ? String(row[k]) === v.slice(3) : String(row[k]) !== v.slice(4)));
+      if (req.method === "GET") return json(200, chatRows.filter(match).slice(0, Number(url.searchParams.get("limit")) || 1000));
+      if (req.method === "POST") { const b = JSON.parse(raw); const i = chatRows.findIndex(r => r.id === b.id); if (i >= 0) chatRows[i] = b; else chatRows.push(b); res.writeHead(201); return res.end(); } // like a table keyed on id alone
+    }
     if (url.pathname === "/rest/v1/user_memories") {
       if (memoryTableMissing) return json(404, { code: "PGRST205", message: "Could not find the table 'public.user_memories' in the schema cache" });
       if (req.method === "GET") return json(200, memories);
@@ -99,7 +107,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
   await listen(groqServer, GROQ_PORT); await listen(sbServer, SB_PORT);
   const server = spawn("node", ["server.js"], {
     cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", MEMORY_EXTRACT_GAP_MS: "400" },
+    env: { ...process.env, RATE_LIMIT_SCALE: "1000", PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", MEMORY_EXTRACT_GAP_MS: "400" },
   });
   let serverLog = ""; server.stdout.on("data", d => serverLog += d); server.stderr.on("data", d => serverLog += d);
   for (let i = 0; i < 50; i++) { try { if ((await call("GET", "/ping")).ok) break; } catch (_) {} await sleep(100); }
@@ -263,6 +271,121 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     const j = await r.json();
     assert.strictEqual(r.status, 401);
     assert.strictEqual(j.error, "Please sign in to continue.");
+  });
+
+  console.log("\nsigned-in checks, security headers, rate limits");
+  const BASE = `http://127.0.0.1:${APP_PORT}`;
+  const b64u = o => Buffer.from(JSON.stringify(o)).toString("base64url");
+  // looks like a real token for this user, but Supabase never issued it: all anyone needs to write is a name and a user id
+  const FORGED = `${b64u({ alg: "HS256" })}.${b64u({ sub: USER.id, exp: Math.floor(Date.now() / 1000) + 3600 })}.not-a-real-signature`;
+  const send = (method, p, { token, body, headers } = {}) => fetch(BASE + p, {
+    method, headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(headers || {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  await t("a forged token can't save a score for someone else (a real one is checked, not just read)", async () => {
+    for (const game of ["pacman", "trex"]) {
+      const r = await send("POST", `/${game}-score`, { body: { score: 500, token: FORGED } });
+      assert.strictEqual(r.status, 401, game);
+      assert.strictEqual((await r.json()).error, "Your session has expired. Please sign in again.");
+    }
+  });
+  await t("scores must be sensible numbers", async () => {
+    for (const score of [-1, 1.5, "99", 10000001, 9e15]) {
+      const r = await send("POST", "/pacman-score", { body: { score, token: TOKEN } });
+      assert.strictEqual(r.status, 400, "score " + score);
+    }
+  });
+  await t("saving a chat can't take over a chat id that belongs to someone else (ids are guessable timestamps)", async () => {
+    const hijack = await send("POST", "/chats", { token: TOKEN, body: { id: "1700000000000", title: "mine now", history: [{ role: "user", content: "hacked" }] } });
+    assert.strictEqual(hijack.status, 409);
+    assert.strictEqual((await hijack.json()).error, "I couldn't save this chat. Please start a new chat and try again.");
+    assert.strictEqual(chatRows.length, 1);
+    assert.strictEqual(chatRows[0].user_id, "22222222-2222-4222-8222-222222222222", "still theirs");
+    assert.strictEqual(chatRows[0].title, "Someone else's chat", "unchanged");
+    const own = await send("POST", "/chats", { token: TOKEN, body: { id: "1800000000000", title: "mine", history: [{ role: "user", content: "hi" }] } });
+    assert.strictEqual(own.status, 200);
+    const again = await send("POST", "/chats", { token: TOKEN, body: { id: "1800000000000", title: "mine", history: [{ role: "user", content: "hi again" }] } });
+    assert.strictEqual(again.status, 200, "saving your own chat again still works");
+    assert.strictEqual(chatRows.filter(r => r.id === "1800000000000").length, 1);
+  });
+  await t("a forged token can't read a profile or overwrite someone's saved chats", async () => {
+    assert.strictEqual((await send("GET", "/profile", { token: FORGED })).status, 401);
+    assert.strictEqual((await send("POST", "/chats", { token: FORGED, body: { id: "c1", title: "x", history: [] } })).status, 401);
+    assert.strictEqual((await send("POST", "/chats", { body: { id: "c1", title: "x", history: [], token: FORGED } })).status, 401, "token in the body too");
+  });
+  await t("study, graph, title, images, read-aloud and link previews need a real sign-in", async () => {
+    const routes = [["POST", "/study"], ["POST", "/graph"], ["POST", "/title"], ["POST", "/generate-image"], ["POST", "/edit-image"], ["POST", "/tts"], ["GET", "/link-preview?url=https://example.com"]];
+    for (const [method, p] of routes) {
+      const none = await send(method, p, method === "POST" ? { body: {} } : {});
+      assert.strictEqual(none.status, 401, p + " with no token");
+      assert.strictEqual((await none.json()).error, "Please sign in to continue.");
+      const fake = await send(method, p, { token: FORGED, ...(method === "POST" ? { body: {} } : {}) });
+      assert.strictEqual(fake.status, 401, p + " with a forged token");
+      assert.strictEqual((await fake.json()).error, "Your session has expired. Please sign in again.");
+    }
+  });
+  await t("...and a real sign-in gets past that check (and then fails only on its own input)", async () => {
+    const link = await send("GET", "/link-preview?url=not-a-link", { token: TOKEN });
+    assert.strictEqual(link.status, 400); assert.strictEqual((await link.json()).error, "That link isn't valid.");
+    const title = await send("POST", "/title", { token: TOKEN, body: { messages: [] } });
+    assert.notStrictEqual(title.status, 401);
+  });
+  await t("every response carries the browser security headers", async () => {
+    const r = await fetch(BASE + "/ping");
+    const csp = r.headers.get("content-security-policy") || "";
+    assert(/script-src 'self' https:\/\/cdn\.jsdelivr\.net(;|$)/.test(csp), csp);
+    assert(!/script-src[^;]*unsafe-inline/.test(csp));
+    assert.strictEqual(r.headers.get("x-content-type-options"), "nosniff");
+    assert.strictEqual(r.headers.get("x-frame-options"), "SAMEORIGIN");
+    assert(r.headers.get("referrer-policy"));
+    const page = await fetch(BASE + "/");
+    assert((page.headers.get("content-security-policy") || "").includes("object-src 'none'"), "the page itself is covered too");
+  });
+  await t("the code-preview page is served with its own sandboxed policy, and the OAuth page has no inline script", async () => {
+    const pv = await fetch(BASE + "/preview-frame.html");
+    assert.strictEqual(pv.status, 200);
+    const csp = pv.headers.get("content-security-policy");
+    assert(/sandbox allow-scripts/.test(csp) && !/allow-same-origin/.test(csp), csp);
+    assert((await fetch(BASE + "/js/preview-frame.js")).status === 200);
+    const cb = await (await fetch(BASE + "/auth/callback")).text();
+    assert(/<script src="\/js\/oauth-callback\.js"><\/script>/.test(cb));
+    assert(!/localStorage|<script>/.test(cb), "no inline script");
+    assert((await fetch(BASE + "/js/oauth-callback.js")).status === 200);
+  });
+  await t("CORS: other websites can't read answers; this site and localhost can", async () => {
+    const evil = await send("GET", "/ping", { headers: { Origin: "https://evil.example" } });
+    assert.strictEqual(evil.headers.get("access-control-allow-origin"), null);
+    const home = await send("GET", "/ping", { headers: { Origin: `http://127.0.0.1:${APP_PORT}` } });
+    assert.strictEqual(home.headers.get("access-control-allow-origin"), `http://127.0.0.1:${APP_PORT}`);
+    const dev = await send("GET", "/ping", { headers: { Origin: "http://localhost:5173" } });
+    assert.strictEqual(dev.headers.get("access-control-allow-origin"), "http://localhost:5173");
+  });
+  await t("sign-in forms can't be sent megabytes of data", async () => {
+    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "x".repeat(200000) } });
+    assert.strictEqual(r.status, 413);
+    assert.strictEqual((await r.json()).error, "That request is too large. Try something smaller.");
+  });
+  await t("wrong passwords: friendly message, then a lockout for that account only (production limits)", async () => {
+    // a second copy of the server with the real limits (the main one runs with them relaxed so the tests above can hammer it)
+    const PORT2 = APP_PORT + 10;
+    const strict = spawn("node", ["server.js"], {
+      cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, RATE_LIMIT_SCALE: "1", PORT: PORT2, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${PORT2}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "" },
+    });
+    try {
+      for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT2}/ping`)).ok) break; } catch (_) {} await sleep(100); }
+      const login = email => fetch(`http://127.0.0.1:${PORT2}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: "wrong" }) });
+      const first = await login("victim@example.com");
+      assert.strictEqual(first.status, 400);
+      assert.strictEqual((await first.json()).error, "That email or password isn't right. Please try again.");
+      for (let i = 1; i < 8; i++) assert.strictEqual((await login("victim@example.com")).status, 400, "attempt " + (i + 1));
+      const locked = await login("Victim@Example.com"); // upper/lower case can't be used to dodge the limit
+      assert.strictEqual(locked.status, 429);
+      assert(/Too many sign-in attempts for that account\. Please try again in \d+ minutes?\./.test((await locked.json()).error));
+      assert(Number(locked.headers.get("retry-after")) > 0);
+      assert.strictEqual((await login("someone-else@example.com")).status, 400, "a different account is not locked");
+    } finally { strict.kill(); }
   });
 
   server.kill();

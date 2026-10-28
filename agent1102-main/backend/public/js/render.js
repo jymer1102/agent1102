@@ -288,7 +288,11 @@
           if (!frame) {
             frame = el("iframe", "code-preview-frame");
             frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
-            frame.srcdoc = shown;
+            // The preview page asks for the code when it has loaded (and again if the frame is put back on the page)
+            window.addEventListener("message", ev => {
+              if (frame && ev.source === frame.contentWindow && ev.data && ev.data.type === "preview-ready") frame.contentWindow.postMessage({ html: shown }, "*");
+            });
+            frame.src = "/preview-frame.html";
           }
           pre.replaceWith(frame);
           setBtn(previewBtn, "fa-code", "View Code");
@@ -701,7 +705,7 @@
   const linkPreviewCache = new Map(); // url -> Promise<preview>
   function fetchLinkPreview(href) {
     if (!linkPreviewCache.has(href)) {
-      const p = fetch(`${BACKEND_URL}/link-preview?url=${encodeURIComponent(href)}`)
+      const p = fetch(`${BACKEND_URL}/link-preview?url=${encodeURIComponent(href)}`, { headers: { "Authorization": `Bearer ${userToken}` } })
         .then(r => (r.ok ? r.json() : null))
         .catch(() => null);
       linkPreviewCache.set(href, p);
@@ -790,7 +794,8 @@
     if (typeof katex === "undefined") { span.textContent = display ? `$$${tex}$$` : `\\(${tex}\\)`; return span; }
     try {
       const html = katex.renderToString(tex, { throwOnError: true, displayMode: display, output: "html", strict: "ignore", maxSize: 500, maxExpand: 1000 });
-      span.innerHTML = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(html) : html;
+      if (typeof DOMPurify === "undefined") { span.textContent = display ? `$$${tex}$$` : `\\(${tex}\\)`; return span; } // never insert unchecked HTML
+      span.innerHTML = DOMPurify.sanitize(html);
     } catch (e) {
       span.className += " math-error";
       span.title = "I couldn't display this formula.";
@@ -1188,8 +1193,9 @@
     try { html = marked.parse(text, { gfm: true, breaks: true }); }
     catch (_) { return text.replace(/\s+/g, " ").trim(); }
 
+    if (typeof DOMPurify === "undefined") return text.replace(/\s+/g, " ").trim(); // never insert unchecked HTML
     const tmp = document.createElement("div");
-    tmp.innerHTML = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(html) : html;
+    tmp.innerHTML = DOMPurify.sanitize(html);
     tmp.querySelectorAll("td, th").forEach(n => n.append(", "));
     tmp.querySelectorAll("li, h1, h2, h3, h4, h5, h6").forEach(n => n.append(". "));
     tmp.querySelectorAll("p, br").forEach(n => n.append(" "));
@@ -1294,7 +1300,7 @@
 
       fetch(`${BACKEND_URL}/tts`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify({ text: chunks[i] }),
       }).then(async (res) => {
         if (session !== ttsSession) return;

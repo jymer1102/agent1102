@@ -61,7 +61,7 @@
     try {
       const res = await fetch(`${BACKEND_URL}/title`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify({ messages: history }),
       });
       const data = await res.json();
