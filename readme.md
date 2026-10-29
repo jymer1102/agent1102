@@ -2,7 +2,7 @@
 
 # agent1102
 
-![README Banner](agent1102-main/backend/public/images/favicon/favicon.png)
+![README Banner](backend/public/images/favicon/favicon.png)
 
 An intelligent web space designed to serve as an interactive AI companion experience with some different uses.
 
@@ -95,7 +95,7 @@ The client tests need Node 20+ (jsdom). They run against fakes, so do one pass a
 README.md                         this section
 supabase/memory.sql               NEW  run once in Supabase
 supabase/schema.sql              NEW  chats, profiles and high-score tables + Row Level Security
-.github/workflows/test.yml        NEW  lint + tests on every push (repo root, not inside agent1102-main/)
+.github/workflows/test.yml        NEW  lint + tests on every push (repo root)
 backend/server.js                 CHANGED  setup, security headers, rate limits, then loads routes/
 backend/routes/*.js               NEW  one file per feature: chat, study, title, linkpreview, media, auth, eggs, scores, chats
 backend/scripts/reset-password.js NEW  owner-run password reset
