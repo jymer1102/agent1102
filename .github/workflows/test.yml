@@ -1,5 +1,4 @@
 # Runs the linter and every test suite on each push and pull request, so a mistake is caught before it is deployed.
-# (The app lives in the agent1102-main/ folder of this repo, so every step runs from agent1102-main/backend.)
 name: Tests
 on:
   push:
@@ -10,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: agent1102-main/backend
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
