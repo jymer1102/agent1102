@@ -119,6 +119,127 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert.strictEqual(groq.parseResetSeconds("1m23.4s"), 84); assert.strictEqual(groq.parseResetSeconds("7.66s"), 8); assert.strictEqual(groq.parseResetSeconds(null), 60);
   });
 
+  console.log("reset-password script");
+  const rp = require("../scripts/reset-password.js");
+  // a fake Supabase admin with 450 users, served 200 at a time like the real one
+  const fakeAdmin = (updates, failUpdate) => {
+    const all = Array.from({ length: 450 }, (_, i) => ({ id: "id" + i, email: `user${i}@example.com` }));
+    all[300].email = "Sam.Smith@Example.com";
+    return { auth: { admin: {
+      listUsers: async ({ page, perPage }) => ({ data: { users: all.slice((page - 1) * perPage, page * perPage) }, error: null }),
+      updateUserById: async (id, body) => { updates.push({ id, body }); return { error: failUpdate ? { message: "Password should be at least 6 characters." } : null }; },
+    } } };
+  };
+  await t("finds a user on a later page, ignoring upper/lower case, and sets the password they were given", async () => {
+    const updates = [];
+    const r = await rp.resetPassword(fakeAdmin(updates), "  sam.smith@example.com ", "Chosen-Pass-1");
+    assert.deepStrictEqual(updates, [{ id: "id300", body: { password: "Chosen-Pass-1" } }]);
+    assert.strictEqual(r.generated, false);
+    assert.strictEqual(r.password, "Chosen-Pass-1");
+  });
+  await t("with no password given it makes a random one and says so", async () => {
+    const updates = [];
+    const a = await rp.resetPassword(fakeAdmin(updates), "user5@example.com");
+    const b = await rp.resetPassword(fakeAdmin(updates), "user5@example.com");
+    assert.strictEqual(a.generated, true);
+    assert(/^[A-Za-z2-9]{14}$/.test(a.password) && !/[0OIl1]/.test(a.password), "14 characters, no look-alikes: " + a.password);
+    assert.notStrictEqual(a.password, b.password);
+    assert.strictEqual(updates[0].body.password, a.password);
+  });
+  await t("a wrong email, a missing email and a Supabase refusal each give a plain message", async () => {
+    await assert.rejects(rp.resetPassword(fakeAdmin([]), "nobody@example.com"), /No account found for nobody@example.com/);
+    await assert.rejects(rp.resetPassword(fakeAdmin([]), undefined), /Give the person's email/);
+    await assert.rejects(rp.resetPassword(fakeAdmin([], true), "user1@example.com", "abc"), /Supabase refused the change: Password should be at least 6/);
+  });
+
+  console.log("rate limiter");
+  const { createLimiter, waitText } = require("../lib/ratelimit");
+  // runs a limiter against a fake request/response and says what happened
+  const hit = async (limiter, req = {}) => {
+    const out = { passed: false, status: null, body: null, headers: {}, finish: null };
+    const res = {
+      statusCode: 200,
+      set(k, v) { out.headers[k] = v; return res; },
+      status(c) { res.statusCode = c; out.status = c; return res; },
+      json(b) { out.body = b; return res; },
+      on(ev, fn) { if (ev === "finish") out.finish = fn; },
+    };
+    await limiter(req, res, () => { out.passed = true; });
+    return out;
+  };
+  await t("allows up to the limit, then answers 429 with a plain message and a wait time", async () => {
+    const lim = createLimiter({ windowMs: 60000, max: 3, key: () => "k", message: w => `Slow down. Try again in ${w}.` });
+    for (let i = 0; i < 3; i++) assert((await hit(lim)).passed, "request " + (i + 1));
+    const blocked = await hit(lim);
+    assert(!blocked.passed); assert.strictEqual(blocked.status, 429);
+    assert(/Try again in (\d+ seconds?|1 minute)\./.test(blocked.body.error), blocked.body.error);
+    assert(Number(blocked.headers["Retry-After"]) > 0);
+  });
+  await t("each key is counted separately, and a missing key is never limited", async () => {
+    const lim = createLimiter({ windowMs: 60000, max: 1, key: r => r.who, message: "no" });
+    assert((await hit(lim, { who: "a" })).passed); assert(!(await hit(lim, { who: "a" })).passed);
+    assert((await hit(lim, { who: "b" })).passed, "another person is unaffected");
+    assert((await hit(lim, {})).passed && (await hit(lim, {})).passed, "no key = no limit");
+  });
+  await t("the count starts again after the window", async () => {
+    const lim = createLimiter({ windowMs: 40, max: 1, key: () => "k", message: "no" });
+    assert((await hit(lim)).passed); assert(!(await hit(lim)).passed);
+    await new Promise(r => setTimeout(r, 60));
+    assert((await hit(lim)).passed);
+  });
+  await t("skipSuccessful: good sign-ins don't count, failed ones do", async () => {
+    const lim = createLimiter({ windowMs: 60000, max: 2, key: () => "k", message: "no", skipSuccessful: true });
+    for (let i = 0; i < 5; i++) { const r = await hit(lim); assert(r.passed, "good attempt " + i); r.finish(); } // statusCode stays 200
+    const failures = [];
+    for (let i = 0; i < 3; i++) { const r = await hit(lim); failures.push(r.passed); }
+    assert.deepStrictEqual(failures, [true, true, false], "the third failure in a row is blocked");
+  });
+  await t("a key function that throws doesn't take the route down", async () => {
+    const lim = createLimiter({ windowMs: 1000, max: 1, key: () => { throw new Error("boom"); }, message: "no" });
+    assert((await hit(lim)).passed);
+  });
+  await t("wait times read naturally", () => {
+    assert.strictEqual(waitText(1), "1 second"); assert.strictEqual(waitText(45), "45 seconds");
+    assert.strictEqual(waitText(60), "1 minute"); assert.strictEqual(waitText(61), "2 minutes");
+  });
+
+  console.log("security settings");
+  const sec = require("../lib/security");
+  const origins = sec.parseOrigins("https://agent1102.onrender.com/x?y=1, https://mine.example , not a url");
+  await t("origins are cleaned up to scheme + host and junk is ignored", () => {
+    assert.deepStrictEqual([...origins], ["https://agent1102.onrender.com", "https://mine.example"]);
+  });
+  await t("CORS: our own sites, localhost and no-Origin requests are allowed; other websites are not", async () => {
+    const ask = o => new Promise(resolve => sec.corsOptions(origins).origin(o, (e, ok) => resolve(ok)));
+    assert.strictEqual(await ask("https://mine.example"), true);
+    assert.strictEqual(await ask("http://localhost:3000"), true);
+    assert.strictEqual(await ask(undefined), true);
+    assert.strictEqual(await ask("https://evil.example"), false);
+    assert.strictEqual(await ask("https://agent1102.onrender.com.evil.example"), false);
+  });
+  await t("the page policy: scripts only from us + jsDelivr, no inline scripts or handlers, no plugins", () => {
+    const csp = sec.appCsp(origins);
+    const dir = name => (csp.split("; ").find(d => d.startsWith(name + " ")) || "");
+    assert.strictEqual(dir("script-src"), "script-src 'self' https://cdn.jsdelivr.net");
+    assert(!/unsafe-inline|unsafe-eval/.test(dir("script-src")));
+    assert.strictEqual(dir("script-src-attr"), "script-src-attr 'none'");
+    assert(/object-src 'none'/.test(csp) && /frame-ancestors 'self'/.test(csp) && /base-uri 'self'/.test(csp));
+    assert(/connect-src 'self' https:\/\/agent1102\.onrender\.com https:\/\/mine\.example/.test(csp), dir("connect-src"));
+  });
+  await t("the code-preview page gets its own, looser policy that is still sandboxed", () => {
+    assert(/'unsafe-inline'/.test(sec.PREVIEW_CSP) && /sandbox allow-scripts/.test(sec.PREVIEW_CSP));
+    assert(!/allow-same-origin/.test(sec.PREVIEW_CSP), "the preview must never share the site's origin");
+    const sent = {};
+    sec.securityHeaders(origins)({ path: sec.PREVIEW_PATH, secure: true }, { setHeader: (k, v) => { sent[k] = v; } }, () => {});
+    assert.strictEqual(sent["Content-Security-Policy"], sec.PREVIEW_CSP);
+    assert.strictEqual(sent["X-Content-Type-Options"], "nosniff");
+    assert(/max-age=/.test(sent["Strict-Transport-Security"]));
+    const plain = {};
+    sec.securityHeaders(origins)({ path: "/", secure: false }, { setHeader: (k, v) => { plain[k] = v; } }, () => {});
+    assert.strictEqual(plain["Content-Security-Policy"], sec.appCsp(origins));
+    assert(!("Strict-Transport-Security" in plain), "no HSTS over plain http");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();

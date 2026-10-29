@@ -209,5 +209,52 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
     d.window.close();
   });
 
+  console.log("preview-frame.js / oauth-callback.js");
+  const publicJs = f => fs.readFileSync(path.join(__dirname, "..", "public", "js", f), "utf8");
+  await t("code preview: asks the page for the code, then draws exactly what it is sent, and only from its parent", async () => {
+    const parent = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/", runScripts: "outside-only" });
+    const child = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/preview-frame.html", runScripts: "outside-only" });
+    const asked = [];
+    parent.window.addEventListener("message", e => asked.push(e.data));
+    Object.defineProperty(child.window, "parent", { value: parent.window });
+    new vm.Script(publicJs("preview-frame.js")).runInContext(child.getInternalVMContext());
+    await new Promise(r => setTimeout(r, 20));
+    assert.strictEqual(JSON.stringify(asked), '[{"type":"preview-ready"}]', "tells the page it is ready");
+    // a message from anywhere else (here: the frame itself) is ignored
+    child.window.dispatchEvent(new child.window.MessageEvent("message", { data: { html: "<h1>nope</h1>" }, source: child.window }));
+    assert(!/nope/.test(child.window.document.body.innerHTML), "ignores other senders");
+    child.window.dispatchEvent(new child.window.MessageEvent("message", { data: { html: "<h1 id=hello>Hello preview</h1>" }, source: parent.window }));
+    assert.strictEqual(child.window.document.getElementById("hello").textContent, "Hello preview");
+    parent.window.close(); child.window.close();
+  });
+  await t("code preview: opened on its own (not inside the chat) it does nothing", async () => {
+    const solo = new JSDOM("<!doctype html><body>empty</body>", { url: "http://localhost/preview-frame.html", runScripts: "outside-only" });
+    new vm.Script(publicJs("preview-frame.js")).runInContext(solo.getInternalVMContext());
+    solo.window.dispatchEvent(new solo.window.MessageEvent("message", { data: { html: "<b>x</b>" }, source: solo.window }));
+    assert.strictEqual(solo.window.document.body.textContent, "empty");
+    solo.window.close();
+  });
+  const oauthPage = (hash) => {
+    const d = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/auth/callback" + hash, runScripts: "outside-only" });
+    // jsdom can't navigate, so record where the script tried to go
+    let went = null;
+    d.window.eval("window.__nav = []"); 
+    const code = publicJs("oauth-callback.js").replace(/window\.location\.href\s*=\s*([^;]+);/g, "window.__nav.push($1);");
+    new vm.Script(code).runInContext(d.getInternalVMContext());
+    went = JSON.stringify(Array.from(d.window.__nav));
+    return { storage: d.window.localStorage, went };
+  };
+  await t("OAuth return page: saves both tokens and goes back to the app", async () => {
+    const r = oauthPage("#access_token=AAA&refresh_token=RRR&token_type=bearer");
+    assert.strictEqual(r.storage.getItem("agent1102_token"), "AAA");
+    assert.strictEqual(r.storage.getItem("agent1102_refresh_token"), "RRR");
+    assert.strictEqual(r.went, '["/"]');
+  });
+  await t("OAuth return page: with no token it goes back with an error flag instead of saving anything", async () => {
+    const r = oauthPage("#error=access_denied");
+    assert.strictEqual(r.storage.getItem("agent1102_token"), null);
+    assert.strictEqual(r.went, '["/?error=oauth_failed"]');
+  });
+
   console.log(`\n${passed} passed`);
 })();

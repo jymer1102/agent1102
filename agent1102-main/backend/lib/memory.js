@@ -24,6 +24,7 @@ const words = t => String(t || "").toLowerCase().match(/[a-z0-9+#.]{3,}/g) || []
 const keyWords = t => new Set(words(t).filter(w => !STOP.has(w)));
 
 // Things that must never be written to memory, whatever the model says
+// eslint-disable-next-line no-useless-escape
 const SENSITIVE = /(?:pass(?:word|code|phrase)|api[_ -]?key|secret|bearer|token|private key|seed phrase|\bssn\b|social security|credit card|debit card|\bcvv\b|\biban\b|routing number|account number|\b(?:\d[ -]?){13,19}\b|\b[A-Za-z0-9_\-]{32,}\b|\bsk-[A-Za-z0-9]{10,}|gsk_[A-Za-z0-9]{10,})/i;
 const looksSensitive = t => SENSITIVE.test(String(t || ""));
 

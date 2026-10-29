@@ -614,7 +614,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`${BACKEND_URL}/generate-image`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify({ prompt }),
       });
       const data = await res.json();
@@ -677,7 +677,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const res = await fetch(`${BACKEND_URL}/edit-image`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -777,7 +777,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`${BACKEND_URL}/graph`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify({ request, context: request.trim() ? context.split("\n").slice(-4).join("\n") : context }),
       });
       const data = await res.json();
@@ -854,7 +854,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`${BACKEND_URL}/study`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
         body: JSON.stringify({ mode: cmd.mode, topic: cmd.topic, count: cmd.count, material, images, context: hasSource ? "" : context }),
       });
       const data = await res.json();
