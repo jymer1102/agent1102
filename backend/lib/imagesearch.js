@@ -25,7 +25,7 @@ const TAVILY_URL = () => process.env.TAVILY_API_URL || "https://api.tavily.com/s
 const COMMONS_URL = () => process.env.COMMONS_API_URL || "https://commons.wikimedia.org/w/api.php";
 
 // Only Brave has a safe-search switch, so this is a small safety net in front of all of them
-const BLOCKED_QUERY = /\b(porn\w*|nude[sd]?|naked|nsfw|hentai|xxx|erotic\w*|fetish\w*|gore|beheading)\b/i;
+const BLOCKED_QUERY = /\b()\b/i;
 const isBlockedQuery = q => BLOCKED_QUERY.test(String(q || ""));
 
 async function viaBrave(query, max, signal) {
