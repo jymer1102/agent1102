@@ -416,8 +416,12 @@
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
   }
 
+  // Light theme, except while the background picture is on: charts then sit on the dark picture,
+  // so they use the dark-theme colours (the same rule style.css applies to the reply text).
+  const chartLight = () => document.body.classList.contains("light") && !document.body.classList.contains("bg-on");
+
   function themeColors() {
-    const light = document.body.classList.contains("light");
+    const light = chartLight();
     return light
       ? { light, text: "#1f1f1f", muted: "#666666", grid: "rgba(0,0,0,0.10)", edge: "#ffffff", bg: "#ffffff" }
       : { light, text: "#ececec", muted: "#a3a3a3", grid: "rgba(255,255,255,0.12)", edge: "#171717", bg: "#171717" };
@@ -559,9 +563,9 @@
   }
 
   // Re-draw charts when the light/dark theme is toggled so text stays readable
-  let lastLight = document.body.classList.contains("light");
+  let lastLight = chartLight();
   new MutationObserver(() => {
-    const light = document.body.classList.contains("light");
+    const light = chartLight();
     if (light === lastLight) return;
     lastLight = light;
     liveCharts.forEach(entry => {
@@ -697,6 +701,92 @@
   }
 
   /* ---------------------------------------------------------- */
+  /*  Pictures from the web (/photos)                            */
+  /*  Built only from data that chat.js put on the message       */
+  /*  itself, never from reply text, so an AI reply (or anything */
+  /*  it was told to repeat) can't make the browser load a       */
+  /*  picture from an address of its choosing.                   */
+  /* ---------------------------------------------------------- */
+  function httpsOnly(u) {
+    try { const p = new URL(String(u)); return p.protocol === "https:" ? p.href : ""; } catch (_) { return ""; }
+  }
+
+  function cleanWebImages(data) {
+    if (!data || !Array.isArray(data.images)) return null;
+    const images = data.images.slice(0, 24).map(x => x && typeof x === "object" ? {
+      title: String(x.title || "").slice(0, 200), thumb: httpsOnly(x.thumb), url: httpsOnly(x.url), page: httpsOnly(x.page), source: String(x.source || "").slice(0, 80),
+    } : null).filter(x => x && x.thumb);
+    return images.length ? { query: String(data.query || "").slice(0, 200), provider: String(data.provider || "").slice(0, 60), images } : null;
+  }
+
+  // The same pictures as plain markdown: what gets copied, downloaded as .md and shown to the AI for follow-up questions
+  function webImagesText(data) {
+    const d = cleanWebImages(data);
+    if (!d) return "";
+    const md = u => u.replace(/\(/g, "%28").replace(/\)/g, "%29");
+    const lines = d.images.map((x, i) => {
+      const label = (x.title || x.source || "Picture").replace(/[\[\]\r\n]+/g, " ").trim();
+      const link = x.page || x.url;
+      return `${i + 1}. [${label}](${md(link)})` + (x.source ? ` (${x.source})` : "");
+    });
+    return `Pictures from the web for "${d.query.replace(/["\r\n]+/g, " ")}"${d.provider ? ` (via ${d.provider})` : ""}:\n\n${lines.join("\n")}`;
+  }
+
+  function buildWebImages(data) {
+    const d = cleanWebImages(data);
+    if (!d) return null;
+    const block = el("div", "web-gallery-block");
+    const head = el("div", "web-gallery-head");
+    head.textContent = `Pictures from the web for \u201c${d.query}\u201d`;
+    const grid = el("div", "web-gallery");
+
+    d.images.forEach(x => {
+      const card = el("figure", "web-image");
+      const link = el("a", "web-image-link");
+      link.href = x.url || x.thumb;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "Open the full picture";
+      const img = el("img");
+      img.alt = x.title || d.query;
+      img.setAttribute("loading", "lazy");
+      img.setAttribute("decoding", "async");
+      img.setAttribute("referrerpolicy", "no-referrer"); // don't tell the picture's host which site is showing it
+      img.addEventListener("error", () => {
+        card.remove();
+        if (!grid.children.length) { grid.remove(); head.textContent = "None of those pictures would load. Try /photos again, or different words."; }
+      });
+      img.src = x.thumb;
+      link.appendChild(img);
+
+      const cap = el("figcaption");
+      const title = el("span", "web-image-title");
+      title.textContent = x.title || x.source || "Picture";
+      cap.appendChild(title);
+      if (x.page) {
+        const src = el("a", "web-image-source");
+        src.href = x.page;
+        src.target = "_blank";
+        src.rel = "noopener noreferrer";
+        src.textContent = x.source || "Source";
+        src.title = "Open the page this picture is from";
+        cap.appendChild(src);
+      } else if (x.source) {
+        const src = el("span", "web-image-source");
+        src.textContent = x.source;
+        cap.appendChild(src);
+      }
+      card.append(link, cap);
+      grid.appendChild(card);
+    });
+
+    const note = el("div", "web-gallery-note");
+    note.textContent = "These pictures belong to their owners. Open the source to see the credit and licence." + (d.provider ? ` Found with ${d.provider}.` : "");
+    block.append(head, grid, note);
+    return block;
+  }
+
+  /* ---------------------------------------------------------- */
   /*  Link preview cards                                         */
   /*  Any external link the AI shares (or a standalone link on   */
   /*  its own line) is shown as a small card with an Open button */
@@ -791,6 +881,7 @@
   // a small inline error rather than breaking the whole message.
   function renderMathSpan(tex, display) {
     const span = el("span", display ? "math-display" : "math-inline");
+    span.setAttribute("data-tex", tex); // copy.js reads this to copy "x²" instead of the drawn glyphs
     if (typeof katex === "undefined") { span.textContent = display ? `$$${tex}$$` : `\\(${tex}\\)`; return span; }
     try {
       const html = katex.renderToString(tex, { throwOnError: true, displayMode: display, output: "html", strict: "ignore", maxSize: 500, maxExpand: 1000 });
@@ -945,6 +1036,58 @@
     const charts = enhance(target);
     // The message is already in the page here, so charts can size themselves
     charts.forEach(entry => drawChart(entry, true));
+  }
+
+  /* ---------------------------------------------------------- */
+  /*  Live preview while an answer is still being written        */
+  /*  Same markdown, math and tables as the finished message, but */
+  /*  none of the heavy parts (charts, code boxes, link cards),   */
+  /*  which are built once when the answer is complete.           */
+  /* ---------------------------------------------------------- */
+  // The unfinished end of a half-written answer, tidied so the preview doesn't flash raw symbols:
+  // an open code fence is closed, a dangling ** or ` is closed, and a table whose header has
+  // arrived but whose "|---|---|" line hasn't is held back for a moment instead of shown as pipes.
+  function tidyDraft(md) {
+    const s = String(md);
+    const fences = s.match(/^ {0,3}(?:`{3,}|~{3,})/gm) || [];
+    if (fences.length % 2) return s + "\n```"; // inside a code block everything is literal
+
+    // a table that is still arriving: its header line is there but the |---|---| line is missing or cut short
+    const lines = s.split("\n");
+    let end = lines.length;
+    while (end > 0 && !lines[end - 1].trim()) end--;
+    let start = end;
+    while (start > 0 && /^\s*\|/.test(lines[start - 1])) start--;
+    const columns = line => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").length;
+    const rows = end - start;
+    if (rows === 1) return lines.slice(0, start).join("\n");
+    if (rows === 2 && /^[\s|:-]+$/.test(lines[end - 1]) && columns(lines[end - 1]) < columns(lines[start])) return lines.slice(0, start).join("\n");
+
+    // an unfinished **bold** or `code` at the very end
+    const cut = s.lastIndexOf("\n") + 1;
+    let tail = s.slice(cut);
+    if ((tail.match(/\*\*/g) || []).length % 2) tail = /\*\*\s*$/.test(tail) ? tail.replace(/\*\*\s*$/, "") : tail + "**";
+    if ((tail.match(/`/g) || []).length % 2) tail = /`$/.test(tail) ? tail.slice(0, -1) : tail + "`";
+    return s.slice(0, cut) + tail;
+  }
+
+  // Fills `target` with the formatted draft. Returns false when the libraries aren't there (caller shows plain text).
+  function renderDraft(target, markdown) {
+    if (typeof marked === "undefined" || typeof DOMPurify === "undefined") return false;
+    const { text, math } = extractMath(tidyDraft(markdown == null ? "" : markdown));
+    let html;
+    try { html = marked.parse(text, { gfm: true, breaks: true }); } catch (_) { return false; }
+    target.innerHTML = DOMPurify.sanitize(html);
+    renderMathIn(target, math);
+    // nothing is fetched while writing (privacy): a picture is shown as its description until the answer is finished
+    target.querySelectorAll("img").forEach(img => img.replaceWith(document.createTextNode(img.getAttribute("alt") || "")));
+    target.querySelectorAll("table").forEach(table => {
+      const wrap = el("div", "table-wrap");
+      table.replaceWith(wrap);
+      wrap.appendChild(table);
+    });
+    target.querySelectorAll("a[href]").forEach(a => { a.target = "_blank"; a.rel = "noopener noreferrer"; });
+    return true;
   }
 
   /* ---------------------------------------------------------- */
@@ -1437,7 +1580,7 @@
   /* ---------------------------------------------------------- */
   /*  Public API                                                 */
   /* ---------------------------------------------------------- */
-  window.addMsg = function addMsg(role, text, imgSrc, index) {
+  window.addMsg = function addMsg(role, text, imgSrc, index, extra) {
     const chat = document.getElementById("chat");
     const isUser = role === "user";
     const content = String(text == null ? "" : text);
@@ -1526,16 +1669,22 @@
     } else {
       const body = el("div", "ai-text msg-content-body");
       wrap.appendChild(body);
-      renderInto(body, content);
+      // A /photos result is drawn as a gallery from data on the message; everything else is markdown
+      const gallery = extra && extra.webImages ? buildWebImages(extra.webImages) : null;
+      if (gallery) body.appendChild(gallery); else renderInto(body, content);
 
       const actions = el("div", "msg-actions");
       const ttsButton = makeBtn("msg-action-btn", "fa-volume-high", "", "Read aloud");
       const copyBtn = makeBtn("msg-action-btn", "fa-copy", "", "Copy response");
       const dlBtn = makeBtn("msg-action-btn", "fa-download", "", "Download response");
 
-      ttsButton.addEventListener("click", () => toggleTTS(ttsButton, speakableText(content)));
+      // (a list of picture links isn't worth reading aloud, so a gallery is announced in one sentence)
+      const spoken = gallery ? `Here are ${gallery.querySelectorAll(".web-image").length} pictures from the web for ${extra.webImages.query}.` : speakableText(content);
+      ttsButton.addEventListener("click", () => toggleTTS(ttsButton, spoken));
       copyBtn.addEventListener("click", async () => {
-        if (await copyText(responseToText(content))) flash(copyBtn, "fa-copy", "", "");
+        // Rich text + clean plain text (no ** | # marks). Falls back to the markdown text if copy.js isn't there.
+        const ok = window.agent1102Copy ? await window.agent1102Copy.copyResponse(content) : await copyText(responseToText(content));
+        if (ok) flash(copyBtn, "fa-copy", "", "");
         else toast("I couldn't copy that. Your browser blocked it.");
       });
       dlBtn.addEventListener("click", () => {
@@ -1544,6 +1693,18 @@
       });
 
       actions.append(ttsButton, copyBtn, dlBtn);
+
+      // Two or more code files in this reply: offer them all in one .zip (zip.js finds and names the files)
+      const zipApi = window.agent1102Zip;
+      const codeFiles = zipApi ? zipApi.extractFiles(content, lang => FILE_EXT[lang]) : [];
+      if (codeFiles.length >= 2) {
+        const zipBtn = makeBtn("msg-action-btn", "fa-file-zipper", "", `Download all ${codeFiles.length} files (.zip)`);
+        zipBtn.addEventListener("click", () => {
+          downloadFile(`agent1102-files-${timestamp()}.zip`, zipApi.toBlob(codeFiles));
+          flash(zipBtn, "fa-file-zipper", "", "");
+        });
+        actions.appendChild(zipBtn);
+      }
 
       // "Try again": only when a user message came before this reply (not the greeting).
       // Drops this reply (and anything after it) and asks for a fresh one.
@@ -1569,7 +1730,7 @@
   // Re-draws one saved history entry (text, image + text, attached files, generated images)
   window.addHistoryMsg = function addHistoryMsg(m, index) {
     if (!m || m.role === "system") return null;
-    if (typeof m.content === "string") return window.addMsg(m.role, m.content, null, index);
+    if (typeof m.content === "string") return window.addMsg(m.role, m.content, null, index, m.webImages ? { webImages: m.webImages } : undefined);
     if (Array.isArray(m.content)) {
       const urls = m.content
         .filter(p => p && p.type === "image_url" && p.image_url && typeof p.image_url.url === "string" && p.image_url.url.startsWith("data:image/"))
@@ -1593,6 +1754,6 @@
   window.agent1102Render = {
     normalizeChartSpec, responseToText, chunkText, parseImageRequest, parseImageEditRequest,
     parseAttachedFiles, historyTitle, escapeHtml, mathToSpeech, speakableText, extractMath, fileChipIcon,
-    buildLinkCard,
+    buildLinkCard, renderDraft, tidyDraft, webImagesText, buildWebImages,
   };
 })();

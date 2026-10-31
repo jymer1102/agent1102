@@ -179,6 +179,7 @@ const L = {
   chatSignedOut: createLimiter({ windowMs: 10 * MIN, max: 10, key: signedOutKey, message: slowDown("Please sign in to keep chatting.") }),
   study: createLimiter({ windowMs: 10 * MIN, max: 20, key: personKey, message: slowDown("You've made a lot of study requests.") }),
   images: createLimiter({ windowMs: 10 * MIN, max: 10, key: personKey, message: slowDown("You've made a lot of image requests.") }),
+  webImages: createLimiter({ windowMs: 10 * MIN, max: 20, key: personKey, message: slowDown("You've searched for a lot of pictures.") }),
   title: createLimiter({ windowMs: MIN, max: 30, key: personKey, message: slowDown("Too many requests.") }),
   tts: createLimiter({ windowMs: MIN, max: 60, key: personKey, message: slowDown("Too many read-aloud requests.") }),
   linkPreview: createLimiter({ windowMs: MIN, max: 90, key: personKey, message: slowDown("Too many link previews.") }),
@@ -202,6 +203,7 @@ require("./routes/study")(ctx);
 require("./routes/title")(ctx);
 require("./routes/chat")(ctx);
 require("./routes/media")(ctx);
+require("./routes/webimages")(ctx);
 require("./routes/auth")(ctx);
 require("./routes/eggs")(ctx);
 require("./routes/scores")(ctx);

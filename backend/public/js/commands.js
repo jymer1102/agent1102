@@ -13,7 +13,8 @@
     { name: "graph",      args: "<function, shape or number line>", desc: "Draw a math graph, number line, geometry diagram or fractions", icon: "fa-chart-line", group: "Create", aliases: ["plot", "numberline"] },
     { name: "image",      args: "<description>",        desc: "Generate an image",                          icon: "fa-image",            group: "Create", aliases: ["imagine", "img", "draw"] },
     { name: "edit",       args: "<change>",             desc: "Edit an attached image, or the last one I made", icon: "fa-wand-magic-sparkles", group: "Create" },
-    { name: "search",     args: "<question>",          desc: "Search the web and answer with sources (the only time I look things up online)", icon: "fa-magnifying-glass", group: "Search" },
+    { name: "search",     args: "<question>",          desc: "Search the web and answer with sources (I only go online for /search and /photos)", icon: "fa-magnifying-glass", group: "Search" },
+    { name: "photos",     args: "<what to find>",      desc: "Find pictures on the web (use /image to create a new one)", icon: "fa-images", group: "Search", aliases: ["photo", "pics", "pictures", "webimages"] },
     { name: "memory",     args: "",                     desc: "See what I remember about you (also: /memory on, /memory off)", icon: "fa-brain",   group: "Personal" },
     { name: "remember",   args: "<fact>",               desc: "Tell me something to remember for next time", icon: "fa-bookmark",         group: "Personal" },
     { name: "forget",     args: "<number or all>",      desc: "Remove one memory, or all of them",          icon: "fa-eraser",           group: "Personal" },
@@ -37,6 +38,13 @@
   function isHelp(text) {
     const p = parseCommand(text);
     return !!p && p.cmd.name === "help";
+  }
+
+  // "/photos golden gate bridge" -> { query: "golden gate bridge" }; a bare "/photos" -> { query: "" }
+  function parseWebImages(text) {
+    const p = parseCommand(text);
+    if (!p || p.cmd.name !== "photos") return null;
+    return { query: p.rest.replace(/^(?:of|for|about)\s+/i, "").trim() };
   }
 
   // "/graph y = x^2" -> { request: "y = x^2" }; "/numberline -2 < x" -> { request: "number line: -2 < x" }
@@ -81,6 +89,7 @@
       "- **Photos of paper:** send a picture of a worksheet or notes with no command and I'll read the words and problems and help with them.",
       "- You can paste or drag files and screenshots straight into the chat.",
       "- **Web search:** I only search the internet when you start a message with `/search`, like `/search latest Node.js version`. I'll answer with sources.",
+      "- **Pictures from the web:** `/photos golden gate bridge` finds existing pictures and shows them as a gallery. Each one links to its own page, so check the credit and licence before you reuse it. (`/image` is different: it creates a brand-new picture.)",
       "- **Memory and style:** I remember lasting facts you share (what you're studying or building) to make answers more personal. `/memory` shows them, `/forget` removes them, `/memory off` pauses it. `/style` sets how I answer, or just tell me, like \"from now on keep it short\".",
       "- **Tables:** any table I give you has Copy CSV and Download CSV buttons. Send a photo of a table and ask me to extract it.",
       "- Use `/quiz` or `/flashcards` on their own to study what we've just been talking about.",
@@ -184,5 +193,5 @@
     input.addEventListener("keydown", e => { if (e.key === "Enter") setTimeout(refresh, 0); });
   });
 
-  window.agent1102Commands = { COMMANDS, parseCommand, parseStudy, parseGraph, isHelp, helpMarkdown };
+  window.agent1102Commands = { COMMANDS, parseCommand, parseStudy, parseGraph, parseWebImages, isHelp, helpMarkdown };
 })();

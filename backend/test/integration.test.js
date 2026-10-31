@@ -45,6 +45,19 @@ const groqServer = http.createServer((req, res) => {
   });
 });
 
+// ---------- fake Wikimedia Commons (the keyless picture search) ----------
+const COMMONS_PORT = 4103;
+const commonsCalls = [];
+let commonsMode = "ok";
+const commonsServer = http.createServer((req, res) => {
+  commonsCalls.push(new URL(req.url, "http://x").searchParams.get("gsrsearch"));
+  if (commonsMode === "error") { res.writeHead(500); return res.end("down"); }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ query: { pages: commonsMode === "empty" ? [] : [
+    { title: "File:Golden_Gate.jpg", index: 1, imageinfo: [{ mime: "image/jpeg", url: "https://upload.wikimedia.org/gg.jpg", thumburl: "https://upload.wikimedia.org/thumb/gg.jpg", descriptionurl: "https://commons.wikimedia.org/wiki/File:Golden_Gate.jpg" }] },
+  ] } }));
+});
+
 // ---------- fake Supabase ----------
 let memories = [], adminUpdates = [], memoryTableMissing = false;
 const sbServer = http.createServer((req, res) => {
@@ -104,10 +117,10 @@ let passed = 0;
 async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { console.log("  FAIL " + name + "\n       " + (e && e.message)); process.exitCode = 1; } }
 
 (async () => {
-  await listen(groqServer, GROQ_PORT); await listen(sbServer, SB_PORT);
+  await listen(groqServer, GROQ_PORT); await listen(sbServer, SB_PORT); await listen(commonsServer, COMMONS_PORT);
   const server = spawn("node", ["server.js"], {
     cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, RATE_LIMIT_SCALE: "1000", PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", MEMORY_EXTRACT_GAP_MS: "400" },
+    env: { ...process.env, RATE_LIMIT_SCALE: "1000", PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", COMMONS_API_URL: `http://127.0.0.1:${COMMONS_PORT}/w/api.php`, MEMORY_EXTRACT_GAP_MS: "400" },
   });
   let serverLog = ""; server.stdout.on("data", d => serverLog += d); server.stderr.on("data", d => serverLog += d);
   for (let i = 0; i < 50; i++) { try { if ((await call("GET", "/ping")).ok) break; } catch (_) {} await sleep(100); }
@@ -315,7 +328,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert.strictEqual((await send("POST", "/chats", { body: { id: "c1", title: "x", history: [], token: FORGED } })).status, 401, "token in the body too");
   });
   await t("study, graph, title, images, read-aloud and link previews need a real sign-in", async () => {
-    const routes = [["POST", "/study"], ["POST", "/graph"], ["POST", "/title"], ["POST", "/generate-image"], ["POST", "/edit-image"], ["POST", "/tts"], ["GET", "/link-preview?url=https://example.com"]];
+    const routes = [["POST", "/study"], ["POST", "/graph"], ["POST", "/title"], ["POST", "/generate-image"], ["POST", "/edit-image"], ["POST", "/web-images"], ["POST", "/tts"], ["GET", "/link-preview?url=https://example.com"]];
     for (const [method, p] of routes) {
       const none = await send(method, p, method === "POST" ? { body: {} } : {});
       assert.strictEqual(none.status, 401, p + " with no token");
@@ -330,6 +343,33 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert.strictEqual(link.status, 400); assert.strictEqual((await link.json()).error, "That link isn't valid.");
     const title = await send("POST", "/title", { token: TOKEN, body: { messages: [] } });
     assert.notStrictEqual(title.status, 401);
+  });
+  await t("/web-images: finds pictures with no API key (Wikimedia Commons), https links only", async () => {
+    commonsCalls.length = 0; commonsMode = "ok";
+    const r = await send("POST", "/web-images", { token: TOKEN, body: { query: "  golden   gate bridge " } });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json();
+    assert.strictEqual(j.query, "golden gate bridge"); assert.strictEqual(j.provider, "Wikimedia Commons");
+    assert.deepStrictEqual(j.images, [{ title: "Golden Gate", thumb: "https://upload.wikimedia.org/thumb/gg.jpg", url: "https://upload.wikimedia.org/gg.jpg", page: "https://commons.wikimedia.org/wiki/File:Golden_Gate.jpg", source: "commons.wikimedia.org" }]);
+    assert.strictEqual(commonsCalls[0], "filetype:bitmap golden gate bridge");
+  });
+  await t("/web-images: asks for a search term, refuses blocked searches, says so when nothing is found or the search is down", async () => {
+    const before = commonsCalls.length;
+    for (const body of [{}, { query: "" }, { query: " a " }, { query: 42 }]) {
+      const r = await send("POST", "/web-images", { token: TOKEN, body });
+      assert.strictEqual(r.status, 400, JSON.stringify(body));
+      assert(/What should I look for/.test((await r.json()).error));
+    }
+    const blocked = await send("POST", "/web-images", { token: TOKEN, body: { query: "nude photos" } });
+    assert.strictEqual(blocked.status, 400); assert(/can't search/.test((await blocked.json()).error));
+    assert.strictEqual(commonsCalls.length, before, "nothing was sent to the search for these");
+    commonsMode = "empty";
+    const none = await send("POST", "/web-images", { token: TOKEN, body: { query: "zzz nothing at all" } });
+    assert.strictEqual(none.status, 200); assert.deepStrictEqual((await none.json()).images, []);
+    commonsMode = "error";
+    const down = await send("POST", "/web-images", { token: TOKEN, body: { query: "search is down now" } });
+    assert.strictEqual(down.status, 502); assert(/isn't working right now/.test((await down.json()).error));
+    commonsMode = "ok";
   });
   await t("every response carries the browser security headers", async () => {
     const r = await fetch(BASE + "/ping");
@@ -389,7 +429,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
   });
 
   server.kill();
-  groqServer.close(); sbServer.close();
+  groqServer.close(); sbServer.close(); commonsServer.close();
   console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
   if (process.exitCode) console.log("--- server log ---\n" + serverLog.slice(-1500));
   process.exit(process.exitCode || 0);

@@ -15,6 +15,9 @@
   const bgLayer = document.getElementById("bg-layer"); // blurred in style.css (--bg-blur)
 
   function applyEaster() {
+    // style.css reads this: in light mode the reply text turns white while the (dark) picture is behind it
+    document.documentElement.classList.toggle("bg-on", !!easterActive);
+    document.body.classList.toggle("bg-on", !!easterActive);
     if (easterActive) {
       const img = portraitQuery.matches ? BG_VERTICAL : BG_HORIZONTAL;
       bgLayer.style.backgroundImage = `url('${img}')`;
@@ -139,7 +142,7 @@
     localStorage.setItem("agent1102_dino","true"); 
     dinoBtn.style.display = "block"; 
     pushEggs(); 
-    showToast("🦖 Dino game unlocked! Click the T-Rex button anytime to play!"); 
+    showToast("Dino game unlocked! Click the T-Rex button anytime to play!"); 
   }
 
   if ((val === "pac-man" || val === "pacman") && !pacmanUnlocked) { 
@@ -148,7 +151,7 @@
     localStorage.setItem("agent1102_pacman","true"); 
     pacmanBtn.style.display = "block"; 
     pushEggs(); 
-    showToast('<i class="fa-solid fa-ghost"></i> Pac-Man game unlocked! Click the Pac-Man button anytime to play!'); 
+    showToast("Pac-Man game unlocked! Click the Pac-Man button anytime to play!"); 
   }
 
   if (val === "allahu akbar") { 

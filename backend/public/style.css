@@ -709,3 +709,47 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 .history-item-naming { flex:1; padding:0.6rem 0.4rem; font-size:0.9rem; font-style:italic; color:var(--text-muted); animation:namingPulse 1.2s ease-in-out infinite; }
 @keyframes namingPulse { 0%, 100% { opacity:0.45; } 50% { opacity:1; } }
 @media (prefers-reduced-motion: reduce) { .history-item-naming { animation:none; } }
+
+/* ============================================================
+   TEXT SELECTION: the app's blue with white text
+   (nothing set this before, so each browser's own default highlight was used)
+   ============================================================ */
+::selection { background:var(--accent); color:#ffffff; }
+::-moz-selection { background:var(--accent); color:#ffffff; }
+/* the title is gradient-filled (transparent text), so its fill has to be set for the highlighted part to show */
+#header-title::selection, .header-title::selection, .auth-box h1::selection { background:var(--accent); color:#ffffff; -webkit-text-fill-color:#ffffff; }
+
+/* ============================================================
+   LIGHT THEME + BACKGROUND PICTURE
+   Replies have no bubble, so their text sits straight on the picture. The picture is almost black, so while it
+   is on, a reply uses the dark theme's colours (white text). With the picture off, nothing here applies and the
+   light theme's dark text is used. The header, message box, sidebar and your own message bubbles are solid
+   surfaces, so they keep the light theme either way.
+   js/easter-eggs.js puts the "bg-on" class on <html> and <body> while the picture is showing.
+   ============================================================ */
+.light.bg-on .msg-wrap.ai {
+  --text:#f7f7f7; --text-muted:#c9c9d1; --border:rgba(255,255,255,0.14);
+  --raised:#111116; --surface:#131318; --surface2:#17171d; --ai-bg:#17171d; --accent-bright:#4FA9FF;
+}
+/* the few places that hard-code a light-theme colour (found by searching for ".light" above) */
+.light.bg-on .ai-text a { color:#6ea8ff; }
+.light.bg-on .msg-content-body th, .light.bg-on .msg-content-body td { border-color:rgba(255,255,255,0.14); }
+.light.bg-on .msg-content-body th { background:rgba(255,255,255,0.06); }
+.light.bg-on .chart-block, .light.bg-on .study-block { background:rgba(255,255,255,0.04); border-color:rgba(255,255,255,0.14); }
+.light.bg-on .chart-error-msg, .light.bg-on .math-error { color:#ff6b6d; }
+.light.bg-on .mathviz-block, .light.bg-on .mv-inline { --mv-halo:rgba(15,15,15,0.85); --mv-legend:rgba(15,15,15,0.75); --mv-hole:#1a1a1a; }
+
+/* ============================================================
+   Pictures from the web (/photos)
+   ============================================================ */
+.web-gallery-block { margin:0.25rem 0 0.5rem; max-width:760px; }
+.web-gallery-head { font-weight:600; margin:0 0 0.6rem; }
+.web-gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:0.6rem; }
+.web-image { margin:0; display:flex; flex-direction:column; border-radius:12px; overflow:hidden; background:var(--surface); border:1px solid var(--border); }
+.web-image-link { display:block; aspect-ratio:4 / 3; background:rgba(127,127,127,0.16); }
+.web-image-link img { display:block; width:100%; height:100%; object-fit:cover; }
+.web-image figcaption { display:flex; flex-direction:column; gap:0.15rem; padding:0.4rem 0.55rem 0.5rem; font-size:0.78rem; line-height:1.3; }
+.web-image-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; color:var(--text); }
+.ai-text .web-image-source, .light.bg-on .ai-text .web-image-source { color:var(--text-muted); font-size:0.72rem; text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ai-text a.web-image-source:hover { color:var(--accent-bright); text-decoration:underline; }
+.web-gallery-note { margin-top:0.55rem; font-size:0.75rem; color:var(--text-muted); }

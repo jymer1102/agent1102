@@ -18,27 +18,42 @@
       (_, lang) => /^chart/i.test(lang) ? "[drawing the chart...]" : /^(quiz|flashcards)$/i.test(lang) ? "[building it...]" : "[drawing...]");
   }
 
-  // A live-text area under the spinner of a "Thinking..." placeholder (the object addThinking() returns)
+  // A live-text area under the spinner of a "Thinking..." placeholder (the object addThinking() returns).
+  // The text is shown formatted as it arrives (bold, lists, tables, math). If the formatting code isn't loaded it
+  // falls back to plain text. Repainting is limited to about 10 times a second so long answers stay smooth.
+  const PAINT_EVERY_MS = 100;
   function createDraft(thinking) {
     const box = document.createElement("div");
-    box.className = "ai-text stream-draft";
-    box.style.cssText = "white-space:pre-wrap;word-break:break-word;margin-top:0.35rem;display:none;";
+    box.className = "ai-text msg-content-body stream-draft";
+    box.style.cssText = "word-break:break-word;margin-top:0.35rem;display:none;";
     thinking.wrap.appendChild(box);
     const chat = document.getElementById("chat");
-    let text = "", queued = false, started = false;
+    let text = "", queued = false, started = false, lastPaint = 0;
     function paint() {
       queued = false;
       if (!box.isConnected) return;
+      lastPaint = Date.now();
       const nearBottom = chat ? chat.scrollHeight - chat.scrollTop - chat.clientHeight < 140 : false;
-      box.textContent = previewText(text);
+      const shown = previewText(text);
+      const R = window.agent1102Render;
+      let formatted = false;
+      if (R && R.renderDraft) { try { formatted = R.renderDraft(box, shown); } catch (_) { formatted = false; } }
+      if (!formatted) { box.style.whiteSpace = "pre-wrap"; box.textContent = shown; }
+      else box.style.whiteSpace = "";
       box.style.display = "block";
       if (nearBottom && chat) chat.scrollTop = chat.scrollHeight;
+    }
+    function schedule() {
+      if (queued) return;
+      queued = true;
+      const wait = Math.max(0, PAINT_EVERY_MS - (Date.now() - lastPaint));
+      if (wait) setTimeout(() => requestAnimationFrame(paint), wait); else requestAnimationFrame(paint);
     }
     return {
       add(piece) {
         if (!started) { started = true; thinking.setLabel("Writing..."); }
         text += piece;
-        if (!queued) { queued = true; requestAnimationFrame(paint); }
+        schedule();
       },
       status(label) { if (label) thinking.setLabel(label); },
     };

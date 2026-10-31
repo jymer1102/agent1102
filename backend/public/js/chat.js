@@ -582,6 +582,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function messagesForServer() {
     return history.map(m => {
       if (m.role === "assistant" && typeof m.content === "string") {
+        if (m.webImages) return { role: "assistant", content: m.content }; // /photos result: the model reads the text list, not our gallery data
         if (m.content === agent1102Commands.helpMarkdown()) return { role: "assistant", content: "[agent1102 showed the list of slash commands]" };
         // quizzes / flashcards travel as plain text so follow-ups like "explain question 3" work
         if (/```(?:quiz|flashcards)\b/i.test(m.content)) return { role: "assistant", content: agent1102Render.responseToText(m.content) };
@@ -625,6 +626,47 @@ document.addEventListener("DOMContentLoaded", () => {
       const md = `![${alt}](${url})`;
       addMsg("ai", md);
       history.push({ role: "assistant", content: md });
+      if (typeof saveCurrentChat === "function") saveCurrentChat();
+    } catch {
+      thinking.text.classList.remove("thinking");
+      thinking.text.textContent = SERVER_UNREACHABLE;
+    }
+  }
+
+  // /photos <what to find>: pictures from the web (found, not created). Shown as a gallery of thumbnails.
+  // The gallery data is kept on the history entry (not in the text), so only this code can ever make a gallery.
+  async function runWebImages(typed, query, opts) {
+    opts = opts || {};
+    if (!opts.skipUser) {
+      addMsg("user", typed);
+      history.push({ role: "user", content: typed });
+      input.value = "";
+    }
+    const say = text => {
+      addMsg("ai", text);
+      history.push({ role: "assistant", content: text });
+      if (typeof saveCurrentChat === "function") saveCurrentChat();
+    };
+
+    if (!query) { say("What should I look for? For example: **/photos golden gate bridge**"); return; }
+
+    const thinking = addThinking("Searching the web for pictures...");
+    try {
+      const res = await fetch(`${BACKEND_URL}/web-images`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
+        body: JSON.stringify({ query }),
+      });
+      const data = await res.json().catch(() => ({}));
+      thinking.wrap.remove();
+      if (!res.ok || data.error) { addMsg("ai", data.error || "I couldn't search for pictures. Please try again."); return; }
+      const images = Array.isArray(data.images) ? data.images : [];
+      if (!images.length) { say(`I couldn't find any pictures for **${query.replace(/[*_`]/g, "")}**. Try different words.`); return; }
+
+      const webImages = { query: data.query || query, provider: data.provider || "", images };
+      const content = agent1102Render.webImagesText(webImages);
+      addMsg("ai", content, null, undefined, { webImages });
+      history.push({ role: "assistant", content, webImages });
       if (typeof saveCurrentChat === "function") saveCurrentChat();
     } catch {
       thinking.text.classList.remove("thinking");
@@ -930,6 +972,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (!hasImg && !/<attached_file/.test(text)) {
+        const photoReq = agent1102Commands.parseWebImages(text);
+        if (photoReq) { await runWebImages(text, photoReq.query, { skipUser: true }); return; }
         const editReq = agent1102Render.parseImageEditRequest(text);
         if (editReq) { await editImage(text, editReq.prompt, null, { skipUser: true }); return; }
         const imgReq = agent1102Render.parseImageRequest(text);
@@ -971,6 +1015,12 @@ document.addEventListener("DOMContentLoaded", () => {
           images: images.map(im => `data:${im.type};base64,${im.base64}`),
         });
         return;
+      }
+
+      // 1a) /photos: find existing pictures on the web
+      if (!hasImage && !files.length) {
+        const photoReq = agent1102Commands.parseWebImages(typed);
+        if (photoReq) { await runWebImages(typed, photoReq.query); return; }
       }
 
       // 1) Is the user asking for an image to be created or an existing one edited?

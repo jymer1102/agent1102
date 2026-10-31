@@ -1,4 +1,4 @@
-// Loads the real browser scripts (stream.js, personal.js, tables.js) into jsdom, sharing one global scope like
+// Loads the real browser scripts (stream.js, personal.js, tables.js, copy.js, render.js) into jsdom, sharing one global scope like
 // the page does, and checks them.   needs:  npm i -D jsdom     run:  node test/client.test.js
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
@@ -18,6 +18,36 @@ run(`let history = []; let userToken = "tok"; const BACKEND_URL = "http://x"; le
 load("stream.js"); load("personal.js"); load("tables.js"); load("sendstate.js");
 
 let passed = 0;
+
+// A fresh page with the real markdown libraries (the same pinned versions index.html loads from the CDN) and the real
+// render.js / copy.js / stream.js / tables.js, for the copy and live-preview tests. `clipboard` records what was copied.
+function makePage() {
+  const d = new JSDOM('<!doctype html><body><div id="chat"></div><textarea id="input"></textarea></body>', { pretendToBeVisual: true, runScripts: "outside-only" });
+  const w = d.window, c = d.getInternalVMContext(), go = code => new vm.Script(code).runInContext(c);
+  const nm = (...p) => fs.readFileSync(path.join(__dirname, "..", "node_modules", ...p), "utf8");
+  const pub = f => fs.readFileSync(path.join(__dirname, "..", "public", "js", f), "utf8");
+  go(nm("marked", "marked.min.js")); go(nm("dompurify", "dist", "purify.min.js"));
+  go("let __toasts = []; function showToast(m){ __toasts.push(m); }");
+  ["render.js", "copy.js", "stream.js", "tables.js"].forEach(f => go(pub(f)));
+  w.document.dispatchEvent(new w.Event("DOMContentLoaded"));
+  const clipboard = { writes: [], texts: [], fail: false };
+  w.ClipboardItem = class { constructor(items) { this.items = items; } };
+  Object.defineProperty(w.navigator, "clipboard", { configurable: true, value: {
+    write: async items => { if (clipboard.fail) throw new Error("blocked"); clipboard.writes.push(items[0].items); },
+    writeText: async t => { clipboard.texts.push(t); },
+  } });
+  const html = async i => clipboard.writes[i]["text/html"].text(), text = async i => clipboard.writes[i]["text/plain"].text();
+  return { w, go, clipboard, html, text };
+}
+const SAMPLE = [
+  "## Results", "",
+  "A **quick comparison** of *three* options with `inline code` and a [link](https://example.com/a):", "",
+  "| Name | Price | Note |", "|---|---|---|", "| **Alpha** | $5 | Uses \\(x^2 + y^2 = z^2\\) |", "| Beta | $7 | café & crème — 100% |", "",
+  "1. First step", "2. Second step", "   - nested **bold**", "   - nested two", "",
+  "> A quote", "", "```js", "const a = 1 * 2;", "```", "",
+  "The formula is $$\\frac{a+b}{2} \\leq \\sqrt{x}$$ and that is it. Escaped \\*stars\\* and snake\\_case.",
+].join("\n");
+
 async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { console.log("  FAIL " + name + "\n       " + e.message); process.exitCode = 1; } }
 
 // a fake fetch Response that delivers SSE text in awkward chunks (splitting events mid-line)
@@ -254,6 +284,153 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
     const r = oauthPage("#error=access_denied");
     assert.strictEqual(r.storage.getItem("agent1102_token"), null);
     assert.strictEqual(r.went, '["/?error=oauth_failed"]');
+  });
+
+  console.log("copy.js (copying answers and tables)");
+  await t("math becomes readable text: powers, fractions, roots, Greek, chemistry, escapes", () => {
+    const m = makePage().w.agent1102Copy.mathToText;
+    const cases = {
+      "x^2 + y^2 = z^2": "x² + y² = z²", "\\frac{a+b}{2}": "(a+b)/2", "\\frac{1}{2}": "1/2", "\\frac{x^2+1}{x-1}": "(x²+1)/(x-1)",
+      "\\sqrt{x+1}": "√(x+1)", "\\sqrt{2}": "√2", "\\sqrt[3]{x}": "³√x", "\\alpha \\leq \\beta": "α ≤ β", "a \\times b": "a × b",
+      "H_2O": "H₂O", "\\ce{H2O}": "H₂O", "\\ce{Fe^{3+}}": "Fe³⁺", "\\int_0^1 x\\,dx": "∫₀¹ x dx", "\\sum_{i=1}^{n} i": "∑ᵢ₌₁ⁿ i",
+      "\\text{speed} = \\frac{d}{t}": "speed = d/t", "x \\text{ if } y": "x if y", "e^{-x^2}": "e^(-x²)", "x_{n+1}": "xₙ₊₁",
+      "\\left( x \\right)": "( x )", "50\\% \\& 3\\$": "50% & 3$", "\\mathbb{R}": "ℝ", "\\sin x + \\cos(\\theta)": "sin x + cos(θ)",
+      "\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}": "[a, b; c, d]",
+    };
+    for (const [tex, want] of Object.entries(cases)) assert.strictEqual(m(tex), want, tex);
+  });
+  await t("copied answer: plain text has no markdown symbols; tables are tab-separated; math is readable", () => {
+    const { text } = makePage().w.agent1102Copy.responseClipboard(SAMPLE);
+    assert.strictEqual(text, [
+      "Results", "",
+      "A quick comparison of three options with inline code and a link (https://example.com/a):", "",
+      "Name\tPrice\tNote", "Alpha\t$5\tUses x² + y² = z²", "Beta\t$7\tcafé & crème — 100%", "",
+      "1. First step", "2. Second step", "   ◦ nested bold", "   ◦ nested two", "",
+      "> A quote", "", "const a = 1 * 2;", "",
+      "The formula is (a+b)/2 ≤ √x and that is it. Escaped *stars* and snake_case.",
+    ].join("\n"));
+    assert(!/\*\*|\|---|\\\(|^#|`/m.test(text.replace("Escaped *stars*", "")), "no ** | # ` or \\( left over");
+  });
+  await t("copied answer: rich version is real HTML (table with borders, bold, link, list) and has no markdown symbols", () => {
+    const { html } = makePage().w.agent1102Copy.responseClipboard(SAMPLE);
+    assert(/<table[^>]*border="1"/.test(html) && /<th[^>]*border: 1px solid/.test(html) && /<td[^>]*>café &amp; crème — 100%<\/td>/.test(html));
+    assert(/<strong>quick comparison<\/strong>/.test(html) && /<a href="https:\/\/example.com\/a">link<\/a>/.test(html) && /<ol>/.test(html) && /<ul>/.test(html));
+    assert(/<td[^>]*>Uses x² \+ y² = z²<\/td>/.test(html), "math in a table cell is text, not drawn glyphs");
+    assert(!/\*\*quick|\|---/.test(html) && html.startsWith('<meta charset="utf-8">'));
+  });
+  await t("copied answer: charts become a table, pictures are not loaded into the paste, markup in the text is not executed", () => {
+    const { w } = makePage();
+    const chart = '```chart\n{"type":"bar","title":"Sales","labels":["Q1","Q2"],"datasets":[{"label":"Units","data":[3,5]}]}\n```';
+    const r = w.agent1102Copy.responseClipboard(chart + "\n\n![cat](https://evil.example/x.png) <img src=x onerror=alert(1)> <script>alert(1)</script>ok");
+    assert(/Sales/.test(r.text) && /Q1\t3/.test(r.text) && /Q2\t5/.test(r.text), r.text);
+    assert(!/<img|<script|onerror/i.test(r.html), r.html);
+    assert(/cat \(https:\/\/evil.example\/x.png\)/.test(r.text));
+  });
+  await t("tables: cell text keeps line breaks as spaces and formulas as text, for Copy table and Copy CSV", () => {
+    const { w } = makePage();
+    const d = w.document.createElement("div");
+    d.innerHTML = '<table><tr><th>A</th><th>B</th></tr><tr><td>line one<br>line two</td><td>area <span class="math-inline" data-tex="\\pi r^2"><span class="katex">πr2</span></span></td></tr><tr><td>say \"hi\"</td><td>tab\there</td></tr></table>';
+    const table = d.firstChild;
+    assert.strictEqual(w.agent1102Copy.tableTsv(table), 'A\tB\nline one line two\tarea πr²\nsay "hi"\ttab here');
+    assert.strictEqual(w.agent1102Tables.tableToCsv(table), 'A,B\r\nline one line two,area πr²\r\n"say ""hi""",tab here');
+    const r = w.agent1102Copy.tableClipboard(table);
+    assert(/<table[^>]*border="1"/.test(r.html) && !/katex|data-tex|class=/.test(r.html) && /area πr²/.test(r.html));
+    assert.strictEqual(r.text.split("\n")[1], "line one line two\tarea πr²");
+  });
+  await t("write(): puts rich + plain text on the clipboard together, and falls back to plain text when blocked", async () => {
+    const { w, clipboard, text, html } = makePage();
+    assert.strictEqual(await w.agent1102Copy.write("<b>hi</b>", "hi"), true);
+    assert.strictEqual(await html(0), "<b>hi</b>"); assert.strictEqual(await text(0), "hi");
+    clipboard.fail = true;
+    assert.strictEqual(await w.agent1102Copy.write("<b>yo</b>", "yo"), true);
+    assert.strictEqual(clipboard.texts[0], "yo", "plain text still lands when the rich copy is refused");
+  });
+  await t("the Copy response button copies the clean version, not the markdown", async () => {
+    const { w, clipboard, text, html } = makePage();
+    w.addMsg("ai", SAMPLE);
+    const btn = [...w.document.querySelectorAll(".msg-action-btn")].find(b => b.title === "Copy response");
+    btn.click();
+    await new Promise(r => setTimeout(r, 30));
+    assert.strictEqual(clipboard.writes.length, 1);
+    const plain = await text(0);
+    assert(/Name\tPrice\tNote/.test(plain) && !/\*\*|\|---/.test(plain.replace("*stars*", "")), plain);
+    assert(/<table/.test(await html(0)));
+  });
+  await t("tables in a finished answer get Copy table (real table), Copy CSV and Download CSV", async () => {
+    const { w, clipboard, html, text } = makePage();
+    w.addMsg("ai", "| Name | Note |\n|---|---|\n| **Zoë** | \\(x^2\\) |\n| Bo | ok |");
+    await new Promise(r => setTimeout(r, 50));
+    const labels = [...w.document.querySelectorAll(".msg-action-btn span")].map(s => s.textContent).filter(Boolean);
+    assert.strictEqual(JSON.stringify(labels), '["Copy table","Copy CSV","Download CSV"]');
+    [...w.document.querySelectorAll(".msg-action-btn")].find(b => /Copy table/.test(b.textContent)).click();
+    await new Promise(r => setTimeout(r, 30));
+    assert(/<table[^>]*border="1"/.test(await html(0)));
+    assert.strictEqual(await text(0), "Name\tNote\nZoë\tx²\nBo\tok");
+  });
+  await t("selecting formulas and pressing Ctrl+C copies readable math instead of the drawn glyphs", () => {
+    const { w } = makePage();
+    const body = w.document.createElement("div"); body.className = "ai-text msg-content-body";
+    body.innerHTML = '<p>Area is <span class="math-inline" data-tex="\\pi r^2"><span class="katex">πr2</span></span> exactly</p>';
+    w.document.body.appendChild(body);
+    w.getSelection().selectAllChildren(body);
+    const set = {}; const ev = new w.Event("copy", { cancelable: true, bubbles: true });
+    ev.clipboardData = { setData: (k, v) => { set[k] = v; } };
+    w.document.dispatchEvent(ev);
+    assert.strictEqual(set["text/plain"], "Area is πr² exactly");
+    assert(ev.defaultPrevented && /πr²/.test(set["text/html"]) && !/katex/.test(set["text/html"]));
+    // a selection with no formulas is left to the browser
+    body.innerHTML = "<p>plain words</p>"; w.getSelection().selectAllChildren(body);
+    const ev2 = new w.Event("copy", { cancelable: true, bubbles: true }); ev2.clipboardData = { setData() {} };
+    w.document.dispatchEvent(ev2);
+    assert(!ev2.defaultPrevented);
+  });
+
+  console.log("live preview while the answer is written");
+  await t("the draft shows bold, lists, tables and math as they arrive, not ** and | marks", async () => {
+    const { w } = makePage();
+    const wrap = w.document.createElement("div"); w.document.body.appendChild(wrap);
+    const draft = w.agent1102Stream.createDraft({ wrap, setLabel() {} });
+    ["Here is **bol", "d** text\n\n| Name | Age |\n|---|---|\n| Bo", "b | 3 |\n\n- one\n- two"].forEach(p => draft.add(p));
+    await new Promise(r => setTimeout(r, 250));
+    const box = wrap.querySelector(".stream-draft");
+    assert(box.querySelector("strong") && box.querySelector("table td") && box.querySelectorAll("li").length === 2, box.innerHTML);
+    assert(!/\*\*|\|---/.test(box.textContent), box.textContent);
+    assert.strictEqual(box.querySelector("td").textContent, "Bob");
+    assert(box.querySelector(".table-wrap table"), "scrolls sideways like the finished message");
+    assert.strictEqual(box.style.whiteSpace, "", "formatted text must not be shown pre-wrapped");
+    assert.strictEqual(w.document.querySelectorAll(".msg-action-btn").length, 0, "no CSV buttons are added to a table that is still being written");
+  });
+  await t("the draft is repainted at a limited rate, not once per piece of text", async () => {
+    const { w } = makePage();
+    const wrap = w.document.createElement("div"); w.document.body.appendChild(wrap);
+    let paints = 0; const orig = w.agent1102Render.renderDraft;
+    w.agent1102Render.renderDraft = (...a) => { paints++; return orig(...a); };
+    const draft = w.agent1102Stream.createDraft({ wrap, setLabel() {} });
+    for (let i = 0; i < 40; i++) { draft.add("word" + i + " "); await new Promise(r => setTimeout(r, 5)); }
+    await new Promise(r => setTimeout(r, 200));
+    assert(paints >= 2 && paints <= 8, "painted " + paints + " times");
+    assert(/word39/.test(wrap.querySelector(".stream-draft").textContent), "the last words still arrive");
+  });
+  await t("half-written endings are tidied: open **, open code block, table header still waiting for its |---| line", () => {
+    const tidy = makePage().w.agent1102Render.tidyDraft;
+    assert.strictEqual(tidy("a **bol"), "a **bol**");
+    assert.strictEqual(tidy("a **"), "a ");
+    assert.strictEqual(tidy("a `co"), "a `co`");
+    assert.strictEqual(tidy("x\n```py\nprint(1) ** 2"), "x\n```py\nprint(1) ** 2\n```");
+    assert.strictEqual(tidy("Intro\n\n| Name | Age |"), "Intro\n");
+    assert.strictEqual(tidy("Intro\n\n| Name | Age |\n|---"), "Intro\n");
+    assert.strictEqual(tidy("| Name | Age |\n|---|---|\n| Bo"), "| Name | Age |\n|---|---|\n| Bo", "a table that has started is shown");
+    assert.strictEqual(tidy("| Name |\n|---|"), "| Name |\n|---|", "a one-column table is not held back");
+    assert.strictEqual(tidy("a **b** c"), "a **b** c");
+  });
+  await t("the draft never loads pictures, and charts/drawings still show as a short label", async () => {
+    const { w } = makePage();
+    const wrap = w.document.createElement("div"); w.document.body.appendChild(wrap);
+    const draft = w.agent1102Stream.createDraft({ wrap, setLabel() {} });
+    draft.add('![cat](https://evil.example/x.png) hi\n\n```chart\n{"type":"bar"');
+    await new Promise(r => setTimeout(r, 80));
+    const box = wrap.querySelector(".stream-draft");
+    assert(!box.querySelector("img") && /cat hi/.test(box.textContent) && /\[drawing the chart\.\.\.\]/.test(box.textContent) && !/\{"type"/.test(box.textContent));
   });
 
   console.log(`\n${passed} passed`);

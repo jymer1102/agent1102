@@ -240,6 +240,111 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert(!("Strict-Transport-Security" in plain), "no HSTS over plain http");
   });
 
+  console.log("finding pictures on the web (lib/imagesearch.js)");
+  const http = require("http");
+  const img = require("../lib/imagesearch");
+  // one fake server stands in for Brave, Tavily and Wikimedia Commons; `seen` records what was asked of it
+  const seen = [];
+  let behaviour = {};
+  const fake = http.createServer((req, res) => {
+    let raw = ""; req.on("data", d => raw += d); req.on("end", () => {
+      const url = new URL(req.url, "http://x");
+      seen.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), headers: req.headers, body: raw ? JSON.parse(raw) : null });
+      const mode = behaviour[url.pathname];
+      if (mode === "error") { res.writeHead(500); return res.end("nope"); }
+      if (mode === "empty") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(url.pathname === "/brave" ? '{"results":[]}' : url.pathname === "/tavily" ? '{"images":[]}' : '{"query":{"pages":[]}}'); }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (url.pathname === "/brave") return res.end(JSON.stringify({ results: [
+        { title: "Bridge <b>one</b>", thumbnail: { src: "https://imgs.search.brave.com/t1" }, properties: { url: "https://site.example/full1.jpg" }, url: "https://site.example/page1", source: "site.example" },
+        { title: "Insecure", thumbnail: { src: "http://imgs.search.brave.com/t2" }, properties: { url: "http://site.example/full2.jpg" }, url: "http://site.example/page2", source: "site.example" },
+        { title: "Dup", thumbnail: { src: "https://imgs.search.brave.com/t1" }, properties: { url: "https://site.example/full1.jpg" }, url: "https://site.example/page1", source: "site.example" },
+        { title: "No thumb", properties: { url: "https://site.example/full3.jpg" } },
+      ] }));
+      if (url.pathname === "/tavily") return res.end(JSON.stringify({ images: ["https://cdn.example/a.jpg", { url: "https://cdn.example/b.jpg", description: "A described picture" }, { url: "javascript:alert(1)" }] }));
+      res.end(JSON.stringify({ query: { pages: [
+        { title: "File:Second_best.png", index: 2, imageinfo: [{ mime: "image/png", url: "https://upload.wikimedia.org/s.png", thumburl: "https://upload.wikimedia.org/thumb/s.png", descriptionurl: "https://commons.wikimedia.org/wiki/File:Second_best.png" }] },
+        { title: "File:Best.jpg", index: 1, imageinfo: [{ mime: "image/jpeg", url: "https://upload.wikimedia.org/b.jpg", thumburl: "https://upload.wikimedia.org/thumb/b.jpg", descriptionurl: "https://commons.wikimedia.org/wiki/File:Best.jpg" }] },
+        { title: "File:Scan.pdf", index: 3, imageinfo: [{ mime: "application/pdf", url: "https://upload.wikimedia.org/x.pdf" }] },
+        { title: "File:Clip.ogv", index: 4, imageinfo: [{ mime: "video/ogg", url: "https://upload.wikimedia.org/x.ogv" }] },
+      ] } }));
+    });
+  });
+  await new Promise(r => fake.listen(4193, "127.0.0.1", r));
+  Object.assign(process.env, { BRAVE_IMAGES_URL: "http://127.0.0.1:4193/brave", TAVILY_API_URL: "http://127.0.0.1:4193/tavily", COMMONS_API_URL: "http://127.0.0.1:4193/commons", BRAVE_API_KEY: "", TAVILY_API_KEY: "" });
+  const reset = (b = {}) => { seen.length = 0; behaviour = b; };
+
+  await t("with no keys it uses Wikimedia Commons: best match first, only real pictures, a polite User-Agent, nice titles", async () => {
+    reset();
+    const r = await img.searchImages("commons only one");
+    assert.strictEqual(r.provider, "commons"); assert.strictEqual(r.label, "Wikimedia Commons");
+    assert.deepStrictEqual(r.images.map(i => i.title), ["Best", "Second best"], "pdf and video are left out, sorted by rank, File: and extension removed");
+    assert.strictEqual(r.images[0].thumb, "https://upload.wikimedia.org/thumb/b.jpg");
+    assert.strictEqual(r.images[0].url, "https://upload.wikimedia.org/b.jpg");
+    assert.strictEqual(r.images[0].page, "https://commons.wikimedia.org/wiki/File:Best.jpg");
+    assert.strictEqual(r.images[0].source, "commons.wikimedia.org");
+    assert(/filetype:bitmap commons only one/.test(seen[0].query.gsrsearch));
+    assert(/agent1102/.test(seen[0].headers["user-agent"]), "Wikimedia asks every client to identify itself");
+  });
+  await t("with a Brave key it asks Brave first, with strict safe-search, and uses Brave's proxied thumbnails", async () => {
+    reset(); process.env.BRAVE_API_KEY = "brave-key";
+    const r = await img.searchImages("brave first one");
+    process.env.BRAVE_API_KEY = "";
+    assert.strictEqual(r.provider, "brave");
+    assert.strictEqual(seen.length, 1, "no need to ask anyone else");
+    assert.strictEqual(seen[0].headers["x-subscription-token"], "brave-key");
+    assert.strictEqual(seen[0].query.safesearch, "strict");
+    assert.strictEqual(r.images.length, 1, "http:// pictures, repeats and entries without a thumbnail are dropped");
+    assert.deepStrictEqual(r.images[0], { title: "Bridge one", thumb: "https://imgs.search.brave.com/t1", url: "https://site.example/full1.jpg", page: "https://site.example/page1", source: "site.example" }, "HTML tags are removed from titles");
+  });
+  await t("Tavily's two image shapes both work, and a javascript: address is never passed on", async () => {
+    reset(); process.env.TAVILY_API_KEY = "tav-key";
+    const r = await img.searchImages("tavily shapes one");
+    process.env.TAVILY_API_KEY = "";
+    assert.strictEqual(r.provider, "tavily");
+    assert.strictEqual(seen[0].body.include_images, true); assert.strictEqual(seen[0].body.include_image_descriptions, true);
+    assert.strictEqual(seen[0].headers.authorization, "Bearer tav-key");
+    assert.deepStrictEqual(r.images.map(i => [i.title, i.thumb]), [["", "https://cdn.example/a.jpg"], ["A described picture", "https://cdn.example/b.jpg"]]);
+    assert.strictEqual(r.images[0].source, "cdn.example");
+  });
+  await t("a provider that fails, or finds nothing, hands over to the next one (Brave -> Tavily -> Commons)", async () => {
+    reset({ "/brave": "error", "/tavily": "empty" }); Object.assign(process.env, { BRAVE_API_KEY: "k", TAVILY_API_KEY: "k" });
+    const r = await img.searchImages("fallback chain one");
+    Object.assign(process.env, { BRAVE_API_KEY: "", TAVILY_API_KEY: "" });
+    assert.strictEqual(r.provider, "commons");
+    assert.deepStrictEqual(seen.map(s => s.path), ["/brave", "/tavily", "/commons"]);
+    assert.strictEqual(r.failed, false);
+  });
+  await t("nothing found is not an error, but every provider failing is", async () => {
+    reset({ "/commons": "empty" });
+    const none = await img.searchImages("nothing here one");
+    assert.deepStrictEqual([none.images.length, none.failed], [0, false]);
+    reset({ "/commons": "error" });
+    const broken = await img.searchImages("everything broken one");
+    assert.deepStrictEqual([broken.images.length, broken.failed], [0, true]);
+  });
+  await t("the same search twice is answered from memory; a failure is never remembered", async () => {
+    reset(); await img.searchImages("cache me please"); await img.searchImages("Cache me   please");
+    assert.strictEqual(seen.length, 1);
+    reset({ "/commons": "error" }); await img.searchImages("flaky one"); reset(); const ok = await img.searchImages("flaky one");
+    assert.strictEqual(ok.images.length, 2, "the next try asks again");
+  });
+  await t("too-short or blocked searches are refused before anything is sent", async () => {
+    reset();
+    assert.deepStrictEqual((await img.searchImages(" a ")).images, []);
+    assert.strictEqual(seen.length, 0);
+    ["nude photos", "NSFW pics", "porn", "hentai art", "xxx"].forEach(q => assert(img.isBlockedQuery(q), q));
+    ["golden gate bridge", "renaissance painting", "assess the damage", "Essex"].forEach(q => assert(!img.isBlockedQuery(q), q));
+  });
+  await t("normalize keeps only https, removes repeats, caps the count, and falls back to the thumbnail for the full-size link", () => {
+    const out = img.normalize([
+      { thumb: "https://a/1.jpg" }, { thumb: "https://a/1.jpg" }, { thumb: "ftp://a/2.jpg" }, { thumb: "not a url" },
+      { thumb: "https://a/3.jpg", full: "http://a/3-big.jpg", page: "javascript:x" }, { thumb: "https://a/4.jpg" },
+    ], 3);
+    assert.deepStrictEqual(out.map(i => i.thumb), ["https://a/1.jpg", "https://a/3.jpg", "https://a/4.jpg"]);
+    assert.strictEqual(out[1].url, "https://a/3.jpg"); assert.strictEqual(out[1].page, "");
+  });
+  fake.close();
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();
