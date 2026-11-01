@@ -16,6 +16,14 @@ function cloudflareEnvHint() {
   return `CLOUDFLARE_API_TOKEN: ${state("CLOUDFLARE_API_TOKEN")}; CLOUDFLARE_ACCOUNT_ID: ${state("CLOUDFLARE_ACCOUNT_ID")}; similar names the server can see: ${similar.length ? JSON.stringify(similar) : "none"}`;
 }
 
+// Cloudflare's image models refuse prompts their filter flags as adult content (error code 3030). Those are reported
+// to the user as "blocked by the filter" instead of the generic "try again later" message.
+const FILTER_MESSAGE = "That was blocked by the image filter. Try describing it in more detail, for example what it looks like, where it is and the style, and keep it family-friendly.";
+function filterBlocked(status, raw) {
+  return status >= 400 && status < 500 && (/\b3030\b/.test(raw) || /nsfw/i.test(raw));
+}
+class FilteredError extends Error {}
+
 const CF_IMAGE_MODEL = process.env.CF_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
 
 async function cloudflareImage(prompt) {
@@ -33,6 +41,7 @@ async function cloudflareImage(prompt) {
   try { json = JSON.parse(raw); } catch (_) {}
   const b64 = json && json.result && json.result.image;
   if (!r.ok || !b64) {
+    if (filterBlocked(r.status, raw)) throw new FilteredError(FILTER_MESSAGE);
     console.error("Cloudflare image failed:", r.status, raw.slice(0, 300)); // usually: wrong token/account ID, or today's free allowance is used up
     return null;
   }
@@ -56,6 +65,7 @@ app.post("/generate-image", needUser, L.images, async (req, res) => {
     if (!url) return res.status(502).json({ error: "I couldn't create that image right now. The free daily image limit may be used up, so please try again later." });
     res.json({ imageUrl: url });
   } catch (err) {
+    if (err instanceof FilteredError) return res.status(422).json({ error: err.message });
     console.error("Cloudflare image error:", err && err.message ? err.message : err);
     res.status(500).json({ error: "I couldn't create that image. Please try again." });
   }
@@ -137,6 +147,7 @@ async function cloudflareEdit(prompt, src) {
   try { json = JSON.parse(raw); } catch (_) {}
   const b64 = json && ((json.result && json.result.image) || json.image);
   if (!r.ok || !b64) {
+    if (filterBlocked(r.status, raw)) throw new FilteredError(FILTER_MESSAGE);
     console.error("Cloudflare edit failed:", r.status, raw.slice(0, 300)); // usually: wrong token/account ID, or today's free allowance is used up
     return null;
   }
@@ -159,7 +170,10 @@ app.post("/edit-image", needUser, L.images, async (req, res) => {
 
     let out = null;
     try { out = await cloudflareEdit(text, src); }
-    catch (err) { console.error("Cloudflare edit error:", err && err.message ? err.message : err); }
+    catch (err) {
+      if (err instanceof FilteredError) return res.status(422).json({ error: err.message });
+      console.error("Cloudflare edit error:", err && err.message ? err.message : err);
+    }
     if (!out) return res.status(502).json({ error: "I couldn't edit that image right now. The free daily image limit may be used up, so please try again later." });
 
     const mime = sniffImageMime(out) || "image/png";
