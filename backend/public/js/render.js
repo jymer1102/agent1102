@@ -70,7 +70,7 @@
   // Briefly swap a button to a green "done" state
   function flash(btn, icon, label, doneLabel) {
     btn.classList.add("copied");
-    setBtn(btn, "fa-check", doneLabel);
+    setBtn(btn, icon === "fa-copy" ? "fa-check fa-copy-done" : "fa-check", doneLabel); // fa-copy-done lets reicon.js show the copy-success icon
     clearTimeout(btn._flashTimer);
     btn._flashTimer = setTimeout(() => {
       btn.classList.remove("copied");
