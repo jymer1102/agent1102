@@ -5,12 +5,53 @@ module.exports = function registerMedia(ctx) {
 const { app, supabaseAdmin, UserError, needUser, L } = ctx;
 
 // --- IMAGE GENERATION ---
+// Preferred: Cloudflare Workers AI (FLUX.1 schnell), which has a free daily allowance. Set CLOUDFLARE_API_TOKEN and
+// CLOUDFLARE_ACCOUNT_ID in Render. The server makes the image, saves it in the public "chat-uploads" Supabase bucket
+// and returns that URL (the same kind of URL /edit returns), so the keys never reach the browser.
+// If Cloudflare isn't set up, or its free allowance for the day is used up, it falls back to the anonymous
+// Pollinations link the app used before, so /image keeps working either way.
+const CF_IMAGE_MODEL = process.env.CF_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
+
+async function cloudflareImage(prompt) {
+  const token = (process.env.CLOUDFLARE_API_TOKEN || "").trim();
+  const account = (process.env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+  if (!token || !account) return null;
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${CF_IMAGE_MODEL}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, steps: 4 }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const raw = await r.text();
+  let json = null;
+  try { json = JSON.parse(raw); } catch (_) {}
+  const b64 = json && json.result && json.result.image;
+  if (!r.ok || !b64) {
+    console.error("Cloudflare image failed:", r.status, raw.slice(0, 300)); // usually: wrong token/account ID, or today's free allowance is used up
+    return null;
+  }
+  const buf = Buffer.from(b64, "base64");
+  const mime = sniffImageMime(buf) || "image/jpeg";
+  const filePath = `generated/${Date.now()}-${Math.random().toString(36).slice(2)}.${MIME_EXT[mime]}`;
+  const { error: upErr } = await supabaseAdmin.storage.from(CHAT_UPLOAD_BUCKET).upload(filePath, buf, { contentType: mime, cacheControl: "31536000", upsert: false });
+  if (upErr) { console.error("Couldn't save the generated image:", upErr.message); return null; }
+  return supabaseAdmin.storage.from(CHAT_UPLOAD_BUCKET).getPublicUrl(filePath).data.publicUrl;
+}
+
 app.post("/generate-image", needUser, L.images, async (req, res) => {
   const { prompt } = req.body;
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
   try {
+    const text = prompt.trim().slice(0, 500);
+    try {
+      const url = await cloudflareImage(text);
+      if (url) return res.json({ imageUrl: url });
+    } catch (err) {
+      console.error("Cloudflare image error:", err && err.message ? err.message : err);
+    }
+    // fallback: anonymous Pollinations link (the browser loads it directly)
     // encodeURIComponent leaves ! ' ( ) * alone; encode them too so the URL can't break markdown
-    const encoded = encodeURIComponent(prompt.trim().slice(0, 500)).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+    const encoded = encodeURIComponent(text).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
     const seed = Math.floor(Math.random() * 1e9); // new seed = a fresh image every time
     const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=768&height=768&nologo=true&seed=${seed}`;
     res.json({ imageUrl });
