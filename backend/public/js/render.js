@@ -1424,7 +1424,7 @@
     ttsBtn = btn;
     btn.classList.add("speaking");
     btn.title = "Stop reading";
-    setBtn(btn, "fa-spinner fa-spin"); // brief loading state while the first chunk is fetched
+    setBtn(btn, "fa-spinner fa-spin-pulse"); // brief loading state while the first chunk is fetched
 
     if (serverTTSAvailable === false) speakWithBrowserVoice(btn, text, session);
     else speakWithServerAudio(btn, text, session);
