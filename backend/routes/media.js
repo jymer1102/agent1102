@@ -5,11 +5,9 @@ module.exports = function registerMedia(ctx) {
 const { app, supabaseAdmin, UserError, needUser, L } = ctx;
 
 // --- IMAGE GENERATION ---
-// Preferred: Cloudflare Workers AI (FLUX.1 schnell), which has a free daily allowance. Set CLOUDFLARE_API_TOKEN and
+// Cloudflare Workers AI (FLUX.1 schnell), which has a free daily allowance. Set CLOUDFLARE_API_TOKEN and
 // CLOUDFLARE_ACCOUNT_ID in Render. The server makes the image, saves it in the public "chat-uploads" Supabase bucket
 // and returns that URL (the same kind of URL /edit returns), so the keys never reach the browser.
-// If Cloudflare isn't set up, or its free allowance for the day is used up, it falls back to the anonymous
-// Pollinations link the app used before, so /image keeps working either way.
 const CF_IMAGE_MODEL = process.env.CF_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
 
 async function cloudflareImage(prompt) {
@@ -41,34 +39,26 @@ async function cloudflareImage(prompt) {
 app.post("/generate-image", needUser, L.images, async (req, res) => {
   const { prompt } = req.body;
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
+  if (!(process.env.CLOUDFLARE_API_TOKEN || "").trim() || !(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()) {
+    console.warn("Image creation is off: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (free).");
+    return res.status(503).json({ error: "Image creation isn't available right now." });
+  }
   try {
-    const text = prompt.trim().slice(0, 500);
-    try {
-      const url = await cloudflareImage(text);
-      if (url) return res.json({ imageUrl: url });
-    } catch (err) {
-      console.error("Cloudflare image error:", err && err.message ? err.message : err);
-    }
-    // fallback: anonymous Pollinations link (the browser loads it directly)
-    // encodeURIComponent leaves ! ' ( ) * alone; encode them too so the URL can't break markdown
-    const encoded = encodeURIComponent(text).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-    const seed = Math.floor(Math.random() * 1e9); // new seed = a fresh image every time
-    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=768&height=768&nologo=true&seed=${seed}`;
-    res.json({ imageUrl });
+    const url = await cloudflareImage(prompt.trim().slice(0, 500));
+    if (!url) return res.status(502).json({ error: "I couldn't create that image right now. The free daily image limit may be used up, so please try again later." });
+    res.json({ imageUrl: url });
   } catch (err) {
-    console.error(err);
+    console.error("Cloudflare image error:", err && err.message ? err.message : err);
     res.status(500).json({ error: "I couldn't create that image. Please try again." });
   }
 });
 
 // --- IMAGE EDITING ("/edit") ---
-// Runs on the server because Pollinations' image-edit endpoint needs an API
-// key (set POLLINATIONS_API_KEY in Render; get one at enter.pollinations.ai)
-// and that key must never reach the browser. Flow: get the source image bytes
-// (an attached photo, or the previously generated image), send them plus the
-// prompt to Pollinations, save the result in the public "chat-uploads"
+// Runs on the server so the Cloudflare token never reaches the browser. Flow: get the
+// source image bytes (an attached photo, or the previously generated image), send them
+// plus the prompt to Cloudflare, save the result in the public "chat-uploads"
 // Supabase Storage bucket, and return that URL for the chat to display.
-// EDIT_MODEL (default "kontext") can be changed without touching code.
+// CF_EDIT_MODEL / CF_EDIT_FIELD can be changed without touching code.
 const CHAT_UPLOAD_BUCKET = "chat-uploads";
 const EDIT_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -114,51 +104,55 @@ async function loadEditSource({ imageUrl, imageBase64 }) {
   return { buf, mime };
 }
 
+// Editing uses Cloudflare Workers AI (FLUX.2 klein, free daily allowance; same CLOUDFLARE_API_TOKEN and
+// CLOUDFLARE_ACCOUNT_ID as /image). cloudflareEdit returns image bytes, or null if it didn't work.
+const CF_EDIT_MODEL = process.env.CF_EDIT_MODEL || "@cf/black-forest-labs/flux-2-klein-4b";
+const CF_EDIT_FIELD = process.env.CF_EDIT_FIELD || "input_image_0"; // name of the multipart field that carries the picture
+
+async function cloudflareEdit(prompt, src) {
+  const token = (process.env.CLOUDFLARE_API_TOKEN || "").trim();
+  const account = (process.env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+  if (!token || !account) return null;
+  const form = new FormData();
+  form.append("prompt", prompt);
+  form.append(CF_EDIT_FIELD, new Blob([src.buf], { type: src.mime }), `image.${MIME_EXT[src.mime]}`);
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${CF_EDIT_MODEL}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+    signal: AbortSignal.timeout(120000),
+  });
+  const type = r.headers.get("content-type") || "";
+  if (r.ok && /^image\//i.test(type)) return Buffer.from(await r.arrayBuffer());
+  const raw = await r.text();
+  let json = null;
+  try { json = JSON.parse(raw); } catch (_) {}
+  const b64 = json && ((json.result && json.result.image) || json.image);
+  if (!r.ok || !b64) {
+    console.error("Cloudflare edit failed:", r.status, raw.slice(0, 300)); // usually: wrong token/account ID, or today's free allowance is used up
+    return null;
+  }
+  return Buffer.from(b64, "base64");
+}
+
 app.post("/edit-image", needUser, L.images, async (req, res) => {
   const { prompt, imageUrl, imageBase64 } = req.body;
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
   if (typeof imageUrl !== "string" && typeof imageBase64 !== "string") {
     return res.status(400).json({ error: "Attach an image to edit, or create one first with /image." });
   }
-  const key = (process.env.POLLINATIONS_API_KEY || "").trim();
-  if (!key) {
-    console.warn("Image editing is off: set POLLINATIONS_API_KEY (free at enter.pollinations.ai).");
+  if (!(process.env.CLOUDFLARE_API_TOKEN || "").trim() || !(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()) {
+    console.warn("Image editing is off: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (free).");
     return res.status(503).json({ error: "Image editing isn't available right now." });
   }
   try {
     const src = await loadEditSource({ imageUrl, imageBase64 });
+    const text = prompt.trim().slice(0, 500);
 
-    const form = new FormData();
-    form.append("image", new Blob([src.buf], { type: src.mime }), `image.${MIME_EXT[src.mime]}`);
-    form.append("prompt", prompt.trim().slice(0, 500));
-    form.append("model", process.env.EDIT_MODEL || "kontext");
-    const r = await fetch("https://gen.pollinations.ai/v1/images/edits", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-      signal: AbortSignal.timeout(120000),
-    });
-    const raw = await r.text();
-    let json = null;
-    try { json = JSON.parse(raw); } catch (_) {}
-    if (!r.ok) {
-      const detail = (json && (json.error && (json.error.message || json.error))) || raw.slice(0, 200);
-      console.error("Pollinations edit failed:", r.status, raw.slice(0, 500));
-      console.error("Pollinations edit detail:", typeof detail === "string" ? detail.slice(0, 160) : "");
-      return res.status(502).json({ error: "The image editor had a problem. Please try again in a moment." });
-    }
-
-    const item = json && Array.isArray(json.data) ? json.data[0] : null;
-    let out;
-    if (item && item.b64_json) out = Buffer.from(item.b64_json, "base64");
-    else if (item && item.url) {
-      const ir = await fetch(item.url, { signal: AbortSignal.timeout(60000) });
-      if (!ir.ok) throw new Error("Couldn't download the edited image.");
-      out = Buffer.from(await ir.arrayBuffer());
-    } else {
-      console.error("Unexpected edit response:", raw.slice(0, 500));
-      return res.status(502).json({ error: "The image editor didn't return a picture. Please try again." });
-    }
+    let out = null;
+    try { out = await cloudflareEdit(text, src); }
+    catch (err) { console.error("Cloudflare edit error:", err && err.message ? err.message : err); }
+    if (!out) return res.status(502).json({ error: "I couldn't edit that image right now. The free daily image limit may be used up, so please try again later." });
 
     const mime = sniffImageMime(out) || "image/png";
     const filePath = `edits/${Date.now()}-${Math.random().toString(36).slice(2)}.${MIME_EXT[mime]}`;
