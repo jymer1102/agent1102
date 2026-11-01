@@ -8,6 +8,14 @@ const { app, supabaseAdmin, UserError, needUser, L } = ctx;
 // Cloudflare Workers AI (FLUX.1 schnell), which has a free daily allowance. Set CLOUDFLARE_API_TOKEN and
 // CLOUDFLARE_ACCOUNT_ID in Render. The server makes the image, saves it in the public "chat-uploads" Supabase bucket
 // and returns that URL (the same kind of URL /edit returns), so the keys never reach the browser.
+// For the "isn't set up" log lines: says which of the two variables the server can see, plus the NAMES (never the
+// values) of any similar-looking variables, which catches a misspelled name or stray spaces in it.
+function cloudflareEnvHint() {
+  const state = n => (process.env[n] || "").trim() ? "set" : "MISSING or empty";
+  const similar = Object.keys(process.env).filter(k => /cloudflare|^cf_/i.test(k) && k !== "CLOUDFLARE_API_TOKEN" && k !== "CLOUDFLARE_ACCOUNT_ID");
+  return `CLOUDFLARE_API_TOKEN: ${state("CLOUDFLARE_API_TOKEN")}; CLOUDFLARE_ACCOUNT_ID: ${state("CLOUDFLARE_ACCOUNT_ID")}; similar names the server can see: ${similar.length ? JSON.stringify(similar) : "none"}`;
+}
+
 const CF_IMAGE_MODEL = process.env.CF_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
 
 async function cloudflareImage(prompt) {
@@ -40,7 +48,7 @@ app.post("/generate-image", needUser, L.images, async (req, res) => {
   const { prompt } = req.body;
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Describe the image you want and try again." });
   if (!(process.env.CLOUDFLARE_API_TOKEN || "").trim() || !(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()) {
-    console.warn("Image creation is off: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (free).");
+    console.warn("Image creation is off. " + cloudflareEnvHint());
     return res.status(503).json({ error: "Image creation isn't available right now." });
   }
   try {
@@ -142,7 +150,7 @@ app.post("/edit-image", needUser, L.images, async (req, res) => {
     return res.status(400).json({ error: "Attach an image to edit, or create one first with /image." });
   }
   if (!(process.env.CLOUDFLARE_API_TOKEN || "").trim() || !(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()) {
-    console.warn("Image editing is off: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (free).");
+    console.warn("Image editing is off. " + cloudflareEnvHint());
     return res.status(503).json({ error: "Image editing isn't available right now." });
   }
   try {
