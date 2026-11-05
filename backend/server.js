@@ -3,9 +3,10 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+// A stray rejected promise should not take every signed-in user's stream down with it: log it and carry on.
+// (Route handlers are wrapped so their rejections become a normal 500; see lib/asyncwrap.js.)
 process.on('unhandledRejection', (err) => {
   console.error('UNHANDLED REJECTION:', err);
-  process.exit(1);
 });
 
 const express = require("express");
@@ -15,10 +16,11 @@ const { createClient } = require("@supabase/supabase-js");
 const { createAuth } = require("./lib/auth");
 const security = require("./lib/security");
 const { createLimiter } = require("./lib/ratelimit");
-
-console.log(">>> agent1102 server build marker: signup-debug-v1 + stream/memory/verify <<<");
+const { wrapAsyncRoutes } = require("./lib/asyncwrap");
+const { createUserMeta } = require("./lib/usermeta");
 
 const app = express();
+wrapAsyncRoutes(app); // async route errors go to the error handler instead of becoming unhandled rejections
 
 // Render puts one proxy in front of the app; "trust proxy" lets Express read the visitor's address through it.
 // If every visitor ever shows up with the same address, set TRUST_PROXY_HOPS (the number of proxies in front).
@@ -30,8 +32,6 @@ app.use(security.securityHeaders(siteOrigins));
 app.use(cors(security.corsOptions(siteOrigins)));
 // Sign-in, account and settings requests are tiny: a small limit stops anyone posting megabytes at them
 app.use(["/auth/signup", "/auth/login", "/auth/refresh", "/auth/update", "/auth/delete", "/prefs", "/memory"], express.json({ limit: "20kb" }));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
 // html/js/css are re-checked on every load so a redeploy is picked up right away (no stale scripts)
 app.use(express.static(path.join(__dirname, "public"), {
   setHeaders: (res, filePath) => { if (/\.(html|js|css)$/i.test(filePath)) res.setHeader("Cache-Control", "no-cache"); },
@@ -185,6 +185,10 @@ const L = {
   linkPreview: createLimiter({ windowMs: MIN, max: 90, key: personKey, message: slowDown("Too many link previews.") }),
 };
 app.use(L.everything); // a generous per-address backstop for every API route (the page's own files are served before this)
+// The large body parsers come AFTER the limiter, so an address that is being throttled can't keep making the server
+// read and parse 10 MB bodies. (The small /auth, /prefs and /memory parser near the top still goes first.)
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 
 // ============================================================
@@ -194,8 +198,9 @@ app.use(L.everything); // a generous per-address backstop for every API route (t
 const ROOT = __dirname;
 const { TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST } = require("./lib/models");
 const { SYSTEM_PROMPT, MATH_VISUALS_GUIDE } = require("./lib/system-prompt");
+const userMeta = createUserMeta({ supabaseAdmin, auth });
 const ctx = {
-  app, supabase, supabaseAdmin, auth, MSG, fail, UserError, friendlyAuthError, needUser, L,
+  app, supabase, supabaseAdmin, auth, userMeta, MSG, fail, UserError, friendlyAuthError, needUser, L,
   TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, MATH_VISUALS_GUIDE, ROOT,
 };
 require("./routes/linkpreview")(ctx);
@@ -219,17 +224,30 @@ app.use((err, req, res, next) => {
   }
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: MSG.badRequest });
   console.error(err);
+  if (res.headersSent) return res.end(); // e.g. a stream that already started: just close it
   res.status(err.status || 500).json({ error: MSG.generic });
 });
 
-// --- SELF KEEP-ALIVE ---
+// --- START, SELF KEEP-ALIVE, SHUTDOWN ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-const SELF_URL = process.env.SITE_URL || "https://agent1102.onrender.com";
+// Render's free tier sleeps an idle service, so the app pings its own public address now and then.
+// Only the FIRST address of SITE_URL is used (it may be a comma-separated list), the ping has a timeout, and it
+// stays off on a laptop or in tests unless SITE_URL is set, so a local run never pokes the live site.
+const firstOrigin = v => String(v || "").split(",")[0].trim().replace(/\/+$/, "");
+const SELF_URL = process.env.SELF_PING === "off" ? "" : firstOrigin(process.env.RENDER_EXTERNAL_URL || process.env.SITE_URL || (process.env.RENDER ? "https://agent1102.onrender.com" : ""));
 function selfPing() {
-  fetch(`${SELF_URL}/ping`)
+  fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) })
     .then((res) => console.log(`Self-ping OK (${res.status})`))
     .catch((err) => console.warn("Self-ping failed:", err.message));
 }
-setInterval(selfPing, 5 * 60 * 1000);
+const pingTimer = SELF_URL ? setInterval(selfPing, 5 * 60 * 1000) : null;
+if (pingTimer) pingTimer.unref();
+
+// On a deploy Render sends SIGTERM: stop taking new requests and give streams that are mid-answer a moment to finish.
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received: shutting down");
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 25000).unref();
+});

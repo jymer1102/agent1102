@@ -7,8 +7,10 @@
 // ============================================================
 "use strict";
 
-function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500 } = {}) {
-  const cache = new Map(); // token -> { user, until }
+function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500, rejectTtlMs = 30 * 1000, maxRejected = 1000 } = {}) {
+  const cache = new Map();    // token -> { user, until }
+  const rejected = new Map(); // token -> until: tokens Supabase has definitively refused (a short memory, so junk can't make us call it over and over)
+  const inflight = new Map(); // token -> the lookup already running for it (the same request asks several times at once)
 
   const bearer = req => (req.headers.authorization || "").split(" ")[1] || null;
 
@@ -17,25 +19,44 @@ function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500 } = {}) 
     catch (_) { return 0; }
   }
 
-  async function verify(token) {
-    if (!token || typeof token !== "string") return null;
-    const now = Date.now();
-    const hit = cache.get(token);
-    if (hit && hit.until > now) return hit.user;
-    cache.delete(token);
+  async function lookup(token, now) {
     let res;
-    try { res = await supabase.auth.getUser(token); } catch (_) { return null; }
+    try { res = await supabase.auth.getUser(token); } catch (_) { return null; } // a network failure: not remembered either way
     const user = res && res.data && res.data.user;
-    if (!user) return null;
+    if (!user) {
+      // Only a clear "this token is not valid" (4xx) is remembered. A 5xx or a missing status means Supabase itself had trouble.
+      const status = res && res.error && res.error.status;
+      if (status >= 400 && status < 500) {
+        rejected.set(token, now + rejectTtlMs);
+        if (rejected.size > maxRejected) rejected.delete(rejected.keys().next().value);
+      }
+      return null;
+    }
     const exp = jwtExpMs(token);
     cache.set(token, { user, until: Math.min(now + ttlMs, exp || now + ttlMs) });
     if (cache.size > maxEntries) cache.delete(cache.keys().next().value);
     return user;
   }
 
+  async function verify(token) {
+    if (!token || typeof token !== "string") return null;
+    const now = Date.now();
+    const hit = cache.get(token);
+    if (hit && hit.until > now) return hit.user;
+    cache.delete(token);
+    const bad = rejected.get(token);
+    if (bad && bad > now) return null;
+    rejected.delete(token);
+    if (inflight.has(token)) return inflight.get(token);
+    const p = lookup(token, now).finally(() => inflight.delete(token));
+    inflight.set(token, p);
+    return p;
+  }
+
   // Call after changing a user's metadata so the next request sees the new values
   function invalidate(userId) {
     for (const [t, v] of cache) if (v.user && v.user.id === userId) cache.delete(t);
+    // (rejected tokens belong to nobody, so there is nothing to clear for them)
   }
 
   return { verify, bearer, invalidate };

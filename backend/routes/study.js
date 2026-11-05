@@ -15,7 +15,9 @@ const { app, MSG, needUser, L, TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST,
 // The JSON is validated here so the page never has to draw a broken quiz.
 const STUDY_MAX_MATERIAL = 40000;
 
-async function groqStudy(system, user, { json, maxTokens }) {
+async function groqStudy(system, user, { json, maxTokens, signal }) {
+  // never wait forever on the AI service, and stop as soon as the person has left (signal) so we don't pay for answers nobody reads
+  const timeout = AbortSignal.timeout(60000);
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
@@ -26,8 +28,9 @@ async function groqStudy(system, user, { json, maxTokens }) {
       ...(json ? { response_format: { type: "json_object" } } : {}),
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
     }),
+    signal: signal && AbortSignal.any ? AbortSignal.any([timeout, signal]) : timeout,
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => ({})); // an HTML error page from a gateway is not JSON
   if (!data.choices || !data.choices[0]) {
     const info = groq.describeError(data, response); // logs the AI service's own wording, returns plain words
     const err = new Error(info.message);
@@ -289,14 +292,14 @@ function dropBrokenMathBlocks(text) {
   return { text: out, broken, good };
 }
 
-async function generateMathVisual(request, context) {
+async function generateMathVisual(request, context, { signal } = {}) {
   const system =
     "You turn a math request into a drawing for a chat app. Reply with ONLY one JSON object (no code fences, no text around it) in this format. " + MATH_VISUALS_GUIDE +
     ' Also add a "caption" field: one or two short sentences saying what the picture shows and its key features (intercepts, vertex, asymptotes, solution set, side lengths). Pick xMin, xMax, yMin, yMax so every key feature is visible. Draw everything the user asked for in ONE picture. Always include at least one of: functions, inequalities, areas, parametric, polar, points, segments, polygons, circles, angles, intervals, arcs or items.';
   const user = (context ? `CONVERSATION SO FAR (for references like "that equation"):\n${context}\n\n` : "") + `REQUEST: ${request}`;
   let feedback = "";
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await groqStudy(system, user + feedback, { json: true, maxTokens: 2500 });
+    const raw = await groqStudy(system, user + feedback, { json: true, maxTokens: 2500, signal });
     const obj = parseJsonLoose(raw);
     const spec = validMathVisual(obj);
     if (!spec) { feedback = "\n\nYour last reply was not a usable drawing. Reply with ONLY one JSON object that has at least one of: functions, inequalities, areas, points, segments, polygons, circles, intervals, items."; continue; }

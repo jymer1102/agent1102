@@ -28,25 +28,20 @@ function highScoreRoute(table, label) {
     if (!user) return res.status(401).json({ error: MSG.session });
     const userId = user.id;
 
-    // only update if it's actually a new high score
-    const { data: existing } = await supabaseAdmin
-      .from(table)
-      .select("high_score")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (existing && score <= existing.high_score) {
-      return res.json({ message: "Not a new high score, no update needed" });
+    // Only ever RAISE the stored score. Reading first and then writing left a gap: two requests at the same moment
+    // (say 100 and 200) could finish in the wrong order and leave the lower score. So the write itself carries the
+    // condition: insert if there is no row yet, otherwise update only where the stored score is lower.
+    const username = await getUsername(userId);
+    const stamp = new Date().toISOString();
+    const { error: insertError } = await supabaseAdmin.from(table).insert({ user_id: userId, username, high_score: score, updated_at: stamp });
+    if (insertError) {
+      if (insertError.code !== "23505") return fail(res, 500, MSG.generic, insertError); // 23505 = this person already has a row
+      const { data: raised, error: updateError } = await supabaseAdmin.from(table)
+        .update({ username, high_score: score, updated_at: stamp })
+        .eq("user_id", userId).lt("high_score", score).select("user_id");
+      if (updateError) return fail(res, 500, MSG.generic, updateError);
+      if (!raised || !raised.length) return res.json({ message: "Not a new high score, no update needed" });
     }
-
-    const { error } = await supabaseAdmin.from(table).upsert({
-      user_id: userId,
-      username: await getUsername(userId),
-      high_score: score,
-      updated_at: new Date().toISOString()
-    });
-
-    if (error) return fail(res, 500, MSG.generic, error);
     res.json({ message: `${label} high score saved!` });
   };
 }

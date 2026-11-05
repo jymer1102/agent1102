@@ -10,11 +10,33 @@ const { createMemory, MemoryUnavailable, memoryCues } = require("../lib/memory")
 const { verifyReply } = require("../lib/verify");
 
 module.exports = function registerChat(ctx) {
-const { app, supabaseAdmin, auth, MSG, fail, L, TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, clip, dropBrokenMathBlocks, generateMathVisual, wantsMathVisual } = ctx;
+const { app, supabaseAdmin, auth, userMeta, MSG, fail, L, TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, clip, dropBrokenMathBlocks, generateMathVisual, wantsMathVisual } = ctx;
 
 // Keeps only the newest few images, only accepts inline (data:) images, and reports whether any remain.
+// The browser sends the whole conversation, so nothing in it can be trusted to be what the page would have sent.
+// Only real chat turns from the person ("user") and the assistant are kept, rebuilt with just role + content.
+// A forged "system" (or "tool", "developer"...) message would otherwise be read by the model as if it were our own
+// instructions, and extra keys or content-part types could carry things the model API treats specially.
+function sanitizeIncoming(messages) {
+  const out = [];
+  for (const m of messages) {
+    if (!m || typeof m !== "object" || (m.role !== "user" && m.role !== "assistant")) continue;
+    if (typeof m.content === "string") { out.push({ role: m.role, content: m.content }); continue; }
+    if (!Array.isArray(m.content)) continue;
+    const parts = [];
+    for (const p of m.content) {
+      if (!p || typeof p !== "object") continue;
+      if (p.type === "text") parts.push({ type: "text", text: typeof p.text === "string" ? p.text : "" });
+      else if (p.type === "image_url") parts.push({ type: "image_url", image_url: { url: p.image_url && p.image_url.url } });
+    }
+    out.push({ role: m.role, content: parts });
+  }
+  return out;
+}
+
 function prepareMessages(messages) {
   let seen = 0;
+  messages = sanitizeIncoming(messages);
   const cleaned = messages.slice().reverse().map(m => {
     if (!m || !Array.isArray(m.content)) return m;
     const parts = m.content.filter(p => !(p && p.type === "text" && !String(p.text == null ? "" : p.text).trim())).map(p => {
@@ -57,16 +79,7 @@ const MAX_HISTORY_CHARS = parseInt(process.env.MAX_HISTORY_CHARS, 10) || 48000; 
 // Changes part of a user's auth metadata without clobbering the rest. It reads the FRESHEST copy first, because the
 // login cache can be a few minutes old and another feature (easter-egg progress, say) may have saved in between.
 // `change` is an object to merge in, or a function (currentMetadata) => object to merge in.
-async function patchUserMetadata(userId, change) {
-  const { data, error: readError } = await supabaseAdmin.auth.admin.getUserById(userId);
-  if (readError || !data || !data.user) throw new Error((readError && readError.message) || "User not found");
-  const current = data.user.user_metadata || {};
-  const patch = typeof change === "function" ? change(current) : change;
-  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { ...current, ...patch } });
-  if (error) throw new Error(error.message);
-  auth.invalidate(userId);
-  return { ...current, ...patch };
-}
+const patchUserMetadata = (userId, change) => userMeta.patch(userId, change); // one change at a time per user (lib/usermeta.js)
 
 // Saves style settings in the user's auth metadata (no table needed)
 async function savePrefs(user, updates) {
@@ -145,6 +158,8 @@ async function verifyAndRepair(reply, ctx) {
 
 app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
   if (!Array.isArray(req.body.messages)) return res.status(400).json({ error: "There's nothing to send yet. Type a message and try again." });
+  const prepared = prepareMessages(req.body.messages);
+  if (!prepared.messages.length) return res.status(400).json({ error: "There's nothing to send yet. Type a message and try again." });
   const sse = /text\/event-stream/i.test(req.headers.accept || "") ? openSse(res) : null;
   const status = text => { if (sse) sse.send({ type: "status", text }); };
 
@@ -152,7 +167,6 @@ app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
   const abort = new AbortController();
   res.on("close", () => { if (!res.writableEnded) abort.abort(); });
 
-  const prepared = prepareMessages(req.body.messages);
   const hasImage = prepared.hasImage;
   const fitted = cues.trimMessages(prepared.messages, MAX_HISTORY_CHARS);
   // /search is the ONLY thing that triggers a web search. The model never sees the word "/search" (in this
@@ -231,7 +245,7 @@ app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
       try {
         status("Drawing it...");
         const ctx = messages.slice(-5, -1).map(m => typeof m.content === "string" ? `${m.role}: ${m.content.slice(0, 600)}` : "").filter(Boolean).join("\n");
-        const out = await generateMathVisual(lastUserText.replace(/^\s*\/\w+\s*/, ""), ctx);
+        const out = await generateMathVisual(lastUserText.replace(/^\s*\/\w+\s*/, ""), ctx, { signal: abort.signal });
         if (out) {
           reply = reply.replace(/```(?:python|py|javascript|js|r|matlab|julia)?\s*\n[\s\S]*?(?:matplotlib|plt\.|numpy|plotly|ggplot|desmos|geogebra)[\s\S]*?```/gi, "").trim();
           reply = reply.replace(/```(?:text|txt|ascii|plaintext)?[ \t]*\n([\s\S]*?)```/gi, (whole, b) =>
