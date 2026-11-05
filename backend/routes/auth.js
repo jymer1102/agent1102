@@ -3,7 +3,7 @@
 const express = require("express");
 
 module.exports = function registerAuth(ctx) {
-const { app, supabase, supabaseAdmin, MSG, fail, friendlyAuthError, L } = ctx;
+const { app, supabase, supabaseAdmin, auth, MSG, fail, friendlyAuthError, L } = ctx;
 
 // --- AUTH ---
 app.post("/auth/refresh", L.refresh, async (req, res) => {
@@ -21,9 +21,19 @@ app.post("/auth/refresh", L.refresh, async (req, res) => {
   res.json({ session: data.session });
 });
 
+const MAX_NAME = 60;
+const looksLikeEmail = e => typeof e === "string" && e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 app.post("/auth/update", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
-  const { name, email, password } = req.body;
+  const body = req.body || {};
+  // check what was sent before anything is saved (these values end up in the account, the profile and every saved chat)
+  if (["name", "email", "password"].some(k => body[k] != null && typeof body[k] !== "string")) return res.status(400).json({ error: "Those details don't look right. Please check them and try again." });
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (name.length > MAX_NAME) return res.status(400).json({ error: `Names can be up to ${MAX_NAME} characters.` });
+  if (email && !looksLikeEmail(email)) return res.status(400).json({ error: "That email address doesn't look right." });
+  if (password && password.length > 128) return res.status(400).json({ error: "That password is too long." });
   const { data: userData, error: authErr } = await supabase.auth.getUser(token);
   if (authErr || !userData.user) {
     return res.status(401).json({ error: MSG.session });
@@ -32,9 +42,15 @@ app.post("/auth/update", async (req, res) => {
   const updates = {};
   if (email) updates.email = email;
   if (password) updates.password = password;
-  if (name) updates.data = { ...user.user_metadata, name };
+  // the admin API calls this field user_metadata ("data" is only for the signed-in-user API and was silently ignored here)
+  if (name) updates.user_metadata = { ...user.user_metadata, name };
   const { data, error } = await supabaseAdmin.auth.admin.updateUserById(user.id, updates);
   if (error) return res.status(error.status && error.status < 500 ? 400 : 500).json({ error: friendlyAuthError(error, "I couldn't save those changes. Please try again.") });
+  auth.invalidate(user.id); // so the next request sees the new details, not a copy cached up to five minutes ago
+  // a new password or email should end every OTHER signed-in session (a thief's, or an old phone); this one stays
+  if ((email || password) && token) {
+    Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(token, "others")).catch(e => console.warn("Signing out other sessions failed:", e.message));
+  }
 
   // keep profiles table in sync
   if (name || email) {
@@ -128,20 +144,30 @@ app.delete("/auth/delete", async (req, res) => {
   const { data: userData, error: authErr } = await supabase.auth.getUser(token);
   if (authErr || !userData.user) return res.status(401).json({ error: MSG.signIn });
   const userId = userData.user.id;
-  await supabaseAdmin.from("chats").delete().eq("user_id", userId);
-  await supabaseAdmin.from("user_memories").delete().eq("user_id", userId).then(() => {}, () => {}); // ignore if memory.sql was never run
-  await removeUserAvatars(userId).catch(err => console.warn("Avatar cleanup failed:", err.message));
-  await supabaseAdmin.from("profiles").delete().eq("id", userId);
-  const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+  // Delete the account FIRST: the tables reference it with "on delete cascade", so one step removes the chats, memories,
+  // scores and profile together. Before, a failure on the last step left a person with their data wiped but their account alive.
+  let { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+  if (error) {
+    // a project whose tables were made without the cascade: clear the rows by hand, then try once more
+    await supabaseAdmin.from("chats").delete().eq("user_id", userId);
+    await supabaseAdmin.from("user_memories").delete().eq("user_id", userId).then(() => {}, () => {}); // ignore if memory.sql was never run
+    await supabaseAdmin.from("profiles").delete().eq("id", userId);
+    ({ error } = await supabaseAdmin.auth.admin.deleteUser(userId));
+  }
   if (error) return fail(res, 500, MSG.generic, error);
+  auth.invalidate(userId); // the old token must stop working now, not when its cached copy expires
+  await removeUserAvatars(userId).catch(err => console.warn("Avatar cleanup failed:", err.message)); // pictures are in Storage, which the cascade doesn't reach
   res.json({ success: true });
 });
 
 app.get("/auth/oauth/:provider", async (req, res) => {
   const { provider } = req.params;
+  if (!/^[a-z0-9_]{1,30}$/.test(provider)) return res.status(400).json({ error: "I couldn't start that sign-in. Please try again." });
+  // SITE_URL may hold several comma-separated addresses (see lib/security.js): the first is this site's own
+  const site = String(process.env.SITE_URL || "https://agent1102.onrender.com").split(",")[0].trim().replace(/\/+$/, "");
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider,
-    options: { redirectTo: `${process.env.SITE_URL || "https://agent1102.onrender.com"}/auth/callback` }
+    options: { redirectTo: `${site}/auth/callback` }
   });
   if (error) return fail(res, 400, "I couldn't start that sign-in. Please try again.", error);
   res.redirect(data.url);
@@ -153,8 +179,12 @@ app.get("/auth/callback", (req, res) => {
 });
 
 app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
-  const { email, password, name, phone } = req.body;
+  const { email, password } = req.body;
+  // name and phone are stored on the account (and travel inside every sign-in token), so keep them plain and short
+  const name = typeof req.body.name === "string" ? req.body.name.trim().slice(0, 60) : undefined;
+  const phone = typeof req.body.phone === "string" ? req.body.phone.trim().slice(0, 30) : undefined;
   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+  if (typeof email !== "string" || typeof password !== "string" || email.length > 254 || password.length > 128) return res.status(400).json({ error: "Please check your email and password and try again." });
   try {
     const { data, error } = await supabase.auth.signUp({
       email, password,
