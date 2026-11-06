@@ -291,6 +291,20 @@ const IMAGES = q => ({ status: 200, json: { query: q, provider: "Wikimedia Commo
     assert.deepStrictEqual(out.slice(0, 2), ["etc/passwd.js", "etc/cron.d/x.js"]);
   }));
 
+  console.log("\nicons");
+  await t("history button = right-sidebar arrow icon (>), close button = left-sidebar arrow icon (<), bomb = Reicon bomb3", () => withApp({}, async app => {
+    const name = sel => { const g = app.$(sel + " svg.ri-glyph"); return g && g.getAttribute("data-name"); };
+    assert.strictEqual(name("#history-btn"), "sidebar-right2");
+    assert.strictEqual(name("#close-sidebar"), "sidebar-left2");
+    const bombs = [...app.w.document.querySelectorAll("#backpack-egg-label svg.ri-glyph")].map(g => g.getAttribute("data-name"));
+    assert.deepStrictEqual(bombs, ["bomb3", "bomb3"]);
+    assert.notStrictEqual(app.$("#history-btn svg.ri-glyph").innerHTML, app.$("#close-sidebar svg.ri-glyph").innerHTML, "mirror images, not the same drawing twice");
+    // everything else is untouched: a normal circle-x button keeps the circle-x
+    app.w.document.body.insertAdjacentHTML("beforeend", '<button id="other-x"><i class="fa-solid fa-circle-xmark"></i></button>');
+    await app.sleep(20);
+    assert.strictEqual(name("#other-x"), "close-circle");
+  }));
+
   console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
   process.exit(process.exitCode || 0);
 })();

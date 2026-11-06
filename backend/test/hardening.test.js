@@ -116,6 +116,26 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     } finally { srv.close(); }
   });
 
+  console.log("\nicon file (public/js/reicon.js)");
+  {
+    const fs = require("fs"), path = require("path"), vm = require("vm");
+    const src = fs.readFileSync(path.join(__dirname, "..", "public", "js", "reicon.js"), "utf8");
+    await t("reicon.js is valid JavaScript (one missing comma silently turns EVERY icon back into Font Awesome)", () => {
+      new vm.Script(src, { filename: "reicon.js" }); // throws SyntaxError if the file is broken
+    });
+    await t("every name in MAP has an embedded icon, and no icon's drawing runs outside the 24x24 box", () => {
+      const MAP = JSON.parse(/var MAP = (\{[\s\S]*?\n {2}\});/.exec(src)[1]);
+      const ICONS = JSON.parse(/var ICONS = (\{.*\});/.exec(src)[1]);
+      const missing = Object.entries(MAP).filter(([, v]) => !ICONS[v]).map(([k, v]) => `${k} -> ${v}`);
+      assert.deepStrictEqual(missing, [], "mapped to an icon that isn't embedded");
+      for (const [name, markup] of Object.entries(ICONS)) {
+        let max = 0;
+        for (const d of markup.matchAll(/ d="([^"]*)"/g)) for (const n of d[1].match(/-?\d*\.?\d+(?:e-?\d+)?/gi) || []) max = Math.max(max, Math.abs(parseFloat(n)));
+        assert(max <= 25, `${name}: path coordinates reach ${max} (an icon pasted at the wrong scale shows as a fragment)`);
+      }
+    });
+  }
+
   console.log(`\n${passed} passed${failed ? `, ${failed} failed` : ""}`);
   process.exit(failed ? 1 : 0);
 })();
