@@ -136,6 +136,35 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     });
   }
 
+  console.log("\nCDN files in index.html");
+  {
+    const fs = require("fs"), path = require("path"), crypto = require("crypto");
+    const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+    const cdnTags = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="(https:\/\/cdn\.jsdelivr\.net\/npm\/[^"]+)"[^>]*>/g)].map(m => ({ url: m[1], tag: m[0] }));
+    await t("every jsdelivr file is pinned to an exact version and has an integrity hash", () => {
+      assert(cdnTags.length >= 6, "expected the CDN tags to be found");
+      for (const { url, tag } of cdnTags) {
+        assert(/npm\/(@?[^@/]+)@\d+\.\d+\.\d+\//.test(url), "not pinned to an exact version: " + url);
+        assert(/integrity="sha384-[A-Za-z0-9+/=]+"/.test(tag), "no integrity hash: " + url);
+        assert(/crossorigin="anonymous"/.test(tag), "integrity needs crossorigin: " + url);
+      }
+    });
+    await t("for libraries installed here, the hash in index.html matches the real file (so a version bump can't leave it stale)", () => {
+      let checked = 0;
+      for (const { url, tag } of cdnTags) {
+        const m = /npm\/(@?[^@/]+)@(\d+\.\d+\.\d+)\/(.+)$/.exec(url);
+        const file = path.join(__dirname, "..", "node_modules", m[1], m[3]);
+        if (!fs.existsSync(file)) continue;
+        const installed = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "node_modules", m[1], "package.json"), "utf8")).version;
+        assert.strictEqual(installed, m[2], `${m[1]}: index.html loads ${m[2]} but ${installed} is installed`);
+        const want = "sha384-" + crypto.createHash("sha384").update(fs.readFileSync(file)).digest("base64");
+        assert(tag.includes(want), `${m[1]}@${m[2]}: hash in index.html does not match the package file`);
+        checked++;
+      }
+      assert(checked >= 2, "expected to check at least marked and dompurify");
+    });
+  }
+
   console.log(`\n${passed} passed${failed ? `, ${failed} failed` : ""}`);
   process.exit(failed ? 1 : 0);
 })();
