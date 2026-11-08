@@ -7,6 +7,7 @@
  *
  * To change an icon: edit MAP. To add one that isn't embedded yet, find its name at https://reicon.dev/icons
  * and add its path markup to ICONS. Anything not in MAP (e.g. brand logos) stays Font Awesome.
+ * To keep ONE icon as the real Font Awesome glyph even though its name is in MAP, add the class fa-keep to it.
  */
 (function () {
   'use strict';
@@ -90,7 +91,7 @@
   document.head.appendChild(css);
 
   function lookup(el) {
-    if (el.classList.contains('fa-brands')) return null;
+    if (el.classList.contains('fa-brands') || el.classList.contains('fa-keep')) return null; // brand logos, and any icon marked fa-keep, stay real Font Awesome
     if (el.classList.contains('fa-copy-done')) return MAP['copy-done'];   // set by flash() in render.js after a copy
     for (var i = 0; i < el.classList.length; i++) {
       var c = el.classList[i];
