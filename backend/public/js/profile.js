@@ -1,4 +1,5 @@
-// Profile
+// Profile picture, name and email: shown on the sidebar's Settings button and on Settings -> Profile.
+// (The Settings window itself, its pages and its forms live in settings.js.)
   // Inline placeholder shown when a user has no picture (no external image host needed)
   const DEFAULT_AVATAR = "data:image/svg+xml," + encodeURIComponent(
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='#888' fill-opacity='.35'/>" +
@@ -12,14 +13,29 @@
     else { icon.style.display = "none"; fallback.style.display = "block"; }
   }
 
-  // The one place the avatar changes everywhere: header icon, profile-modal preview, and the local cache.
+  const avatarRemoveBtn = document.getElementById("avatar-remove");
+
+  // The one place the avatar changes everywhere: the sidebar's Settings button, the Settings -> Profile preview, and the local cache.
   // Supabase is the source of truth; localStorage only holds the picture's URL so it shows instantly on load.
   function setAvatar(url) {
     if (url) localStorage.setItem("agent1102_avatar", url); else localStorage.removeItem("agent1102_avatar");
     updateProfileIcon(url);
     avatarPreview.src = url || DEFAULT_AVATAR;
+    if (avatarRemoveBtn) avatarRemoveBtn.hidden = !url; // the little x only exists when there is a picture to remove
   }
   function clearAvatar() { setAvatar(null); }
+
+  // The name on the Settings button, and the email shown under Settings -> Profile
+  function setDisplayName(name) {
+    name = String(name || "").trim();
+    if (name) localStorage.setItem("agent1102_name", name); else localStorage.removeItem("agent1102_name");
+    document.getElementById("settings-name").textContent = name || "Account";
+  }
+  function setAccountEmail(email) {
+    document.getElementById("profile-email-current").textContent = email || "\u2014";
+  }
+  function clearAccountDisplay() { setDisplayName(""); setAccountEmail(""); }
+  setDisplayName(localStorage.getItem("agent1102_name"));
 
   // Show the cached picture immediately. (Older versions cached the image itself as base64, so only trust real URLs.)
   const savedAvatar = localStorage.getItem("agent1102_avatar");
@@ -32,52 +48,10 @@
       if (!res.ok) return; // e.g. offline or no profile row yet: keep whatever is cached
       const { profile } = await res.json();
       setAvatar(profile?.avatar_url || null);
+      if (profile?.name) setDisplayName(profile.name);
+      setAccountEmail(profile?.email || "");
     } catch { /* network error: keep whatever is cached */ }
   }
-
-  profileBtn.addEventListener("click", () => {
-    document.getElementById("profile-name").value = localStorage.getItem("agent1102_name") || "";
-    document.getElementById("profile-email").value = "";
-    document.getElementById("profile-password").value = "";
-    hidePasswords();
-    profileMsg.textContent = "";
-    profileModal.classList.add("open");
-  });
-  profileClose.addEventListener("click", () => { profileModal.classList.remove("open"); });
-  profileModal.addEventListener("click", (e) => { if (e.target === profileModal) profileModal.classList.remove("open"); });
-
-  profileSave.addEventListener("click", async () => {
-    const name = document.getElementById("profile-name").value.trim();
-    const email = document.getElementById("profile-email").value.trim();
-    const password = document.getElementById("profile-password").value.trim();
-    profileSave.disabled = true; profileSave.innerHTML = '<i class="fa-solid fa-spinner fa-spin-pulse"></i> Saving...';
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userToken}` },
-        body: JSON.stringify({ name: name || undefined, email: email || undefined, password: password || undefined }),
-      });
-      const data = await res.json();
-      if (data.error) { profileMsg.style.color = "#e74c3c"; profileMsg.textContent = data.error; }
-      else {
-        if (name) localStorage.setItem("agent1102_name", name);
-        profileMsg.style.color = "#2ecc71"; profileMsg.textContent = "Saved!";
-        setTimeout(() => { profileModal.classList.remove("open"); profileMsg.textContent = ""; }, 1500);
-      }
-    } catch { profileMsg.style.color = "#e74c3c"; profileMsg.textContent = "I can't reach the server right now. Check your connection and try again."; }
-    profileSave.disabled = false; profileSave.textContent = "Save";
-  });
-
-  profileDelete.addEventListener("click", async () => {
-    if (!confirm("Are you sure you want to delete your account? This can't be undone!")) return;
-    if (!confirm("Last chance — all your chats will be permanently deleted too. Continue?")) return;
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/delete`, { method: "DELETE", headers: { "Authorization": `Bearer ${userToken}` } });
-      const data = await res.json();
-      if (data.error) { showToast(agent1102Render.escapeHtml(data.error)); return; }
-      localStorage.clear(); showAuth();
-    } catch { showToast("I couldn't delete your account because I can't reach the server. Check your connection and try again."); }
-  });
 
   // --- PROFILE PICTURE UPLOAD LOGIC ---
   // The original file is sent to the server untouched (no resizing or re-compression) and stored in Supabase Storage.
@@ -113,6 +87,7 @@
       // Remember the saved URL for next time. The UI keeps showing the already-loaded local image,
       // so there's no flicker or second download; every other device / future load uses `url`.
       localStorage.setItem("agent1102_avatar", url);
+      if (avatarRemoveBtn) avatarRemoveBtn.hidden = false;
       showToast('<span class="toast-success">Profile picture updated! <i class="fa-solid fa-circle-check"></i></span>');
     } catch (err) {
       console.error("Avatar upload failed:", err);
@@ -123,4 +98,23 @@
       showToast(agent1102Render.escapeHtml(reason || "I couldn't upload that picture. Please try again."));
     }
     e.target.value = "";
+  });
+
+  // --- REMOVE THE PICTURE (the small x on the preview) ---
+  if (avatarRemoveBtn) avatarRemoveBtn.addEventListener("click", async () => {
+    if (!confirm("Remove your profile picture?")) return;
+    const previousUrl = localStorage.getItem("agent1102_avatar");
+    avatarRemoveBtn.disabled = true;
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/avatar`, { method: "DELETE", headers: { "Authorization": `Bearer ${userToken}` } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || "I couldn't remove that picture. Please try again.");
+      setAvatar(null);
+      showToast('<span class="toast-success">Profile picture removed <i class="fa-solid fa-circle-check"></i></span>');
+    } catch (err) {
+      setAvatar(previousUrl); // nothing changed on the server, so keep showing the picture
+      const reason = err instanceof TypeError ? "I can't reach the server right now. Check your connection and try again." : err.message;
+      showToast(agent1102Render.escapeHtml(reason || "I couldn't remove that picture. Please try again."));
+    }
+    avatarRemoveBtn.disabled = false;
   });

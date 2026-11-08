@@ -16,7 +16,7 @@
   });
 
   // New chat (keeps the old behavior: saves the current chat, then starts fresh)
-  newChatBtn.addEventListener("click", () => { saveCurrentChat(); history = []; chatEl.innerHTML = ""; currentChatId = Date.now().toString(); currentChatTitle = null; currentChatTitleLocked = false; titleAtCount = 0; addGreeting(); });
+  newChatBtn.addEventListener("click", () => { saveCurrentChat(); history = []; chatEl.innerHTML = ""; currentChatId = Date.now().toString(); currentChatTitle = null; currentChatTitleLocked = false; titleAtCount = 0; addGreeting(); closeSidebarFn(); });
 
   // Trash-can button: permanently deletes the CURRENT chat (not just clears the view)
   clearBtn.addEventListener("click", async () => {

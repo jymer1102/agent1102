@@ -20,7 +20,7 @@ async function groqStudy(system, user, { json, maxTokens, signal }) {
   const timeout = AbortSignal.timeout(60000);
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+    headers: groq.authHeaders(), // the shared key, or the person's own (lib/groq.js)
     body: JSON.stringify({
       model: TEXT_MODEL,
       max_tokens: maxTokens,
@@ -99,7 +99,7 @@ const MAX_STUDY_PHOTOS = 6; // read in batches of 3 (the vision model's per-requ
 async function transcribeChunk(list, start) {
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+    headers: groq.authHeaders(), // the shared key, or the person's own (lib/groq.js)
     body: JSON.stringify({
       model: VISION_MODEL,
       max_tokens: 3500,

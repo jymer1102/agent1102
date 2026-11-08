@@ -1001,8 +1001,8 @@ document.addEventListener("DOMContentLoaded", () => {
     sending = true;
     btn.disabled = true;
     try {
-      // 0a) Personal commands: /memory, /remember, /forget, /style (shown in the chat, never sent to the AI)
-      if (!hasImage && !files.length && agent1102Personal.match(typed)) { await agent1102Personal.run(typed); return; }
+      // 0a) /memory, /remember, /forget and /style moved into Settings -> AI: say so (shown in the chat, never sent to the AI)
+      if (!hasImage && !files.length && agent1102Settings.isMovedCommand(typed)) { agent1102Settings.explainMovedCommand(typed); return; }
       // 0) Slash commands: /help and the study modes (/learn, /quiz, /flashcards)
       if (!hasImage && !files.length && agent1102Commands.isHelp(typed)) { await runHelp(typed); return; }
       const graphReq = !hasImage && !files.length ? agent1102Commands.parseGraph(typed) : null;

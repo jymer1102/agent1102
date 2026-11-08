@@ -15,10 +15,6 @@
     { name: "edit",       args: "<change>",             desc: "Edit an attached image, or the last one I made", icon: "fa-wand-magic-sparkles", group: "Create" },
     { name: "search",     args: "<question>",          desc: "Search the web and answer with sources (I only go online for /search and /photos)", icon: "fa-magnifying-glass", group: "Search" },
     { name: "photos",     args: "<what to find>",      desc: "Find pictures on the web (use /image to create a new one)", icon: "fa-images", group: "Search", aliases: ["photo", "pics", "pictures", "webimages"] },
-    { name: "memory",     args: "",                     desc: "See what I remember about you (also: /memory on, /memory off)", icon: "fa-brain",   group: "Personal" },
-    { name: "remember",   args: "<fact>",               desc: "Tell me something to remember for next time", icon: "fa-bookmark",         group: "Personal" },
-    { name: "forget",     args: "<number or all>",      desc: "Remove one memory, or all of them",          icon: "fa-eraser",           group: "Personal" },
-    { name: "style",      args: "[concise, casual, ...]", desc: "See or change how I answer you (length, tone, emojis, format)", icon: "fa-sliders", group: "Personal" },
   ];
 
   const namesOf = c => [c.name, ...(c.aliases || [])];
@@ -90,7 +86,7 @@
       "- You can paste or drag files and screenshots straight into the chat.",
       "- **Web search:** I only search the internet when you start a message with `/search`, like `/search latest Node.js version`. I'll answer with sources.",
       "- **Pictures from the web:** `/photos golden gate bridge` finds existing pictures and shows them as a gallery. Each one links to its own page, so check the credit and licence before you reuse it. (`/image` is different: it creates a brand-new picture.)",
-      "- **Memory and style:** I remember lasting facts you share (what you're studying or building) to make answers more personal. `/memory` shows them, `/forget` removes them, `/memory off` pauses it. `/style` sets how I answer, or just tell me, like \"from now on keep it short\".",
+      "- **Memory and style:** open **Settings** (your profile at the bottom of the sidebar), then **AI**. There you can tell me how to talk to you and what to know about you, see or delete what I've remembered, and add your own Groq API key for your own usage limits.",
       "- **Tables:** any table I give you has Copy CSV and Download CSV buttons. Send a photo of a table and ask me to extract it.",
       "- Use `/quiz` or `/flashcards` on their own to study what we've just been talking about.",
       "- Add a number to choose the size, like `/quiz 5 the French Revolution`.",

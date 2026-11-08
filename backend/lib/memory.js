@@ -6,7 +6,7 @@
 //      Discord bot in Python", "remember that..."), a small model call pulls out short facts and saves them in
 //      the user_memories table (supabase/memory.sql)
 //    - before every reply, the most relevant memories are added to the prompt as background
-//    - the user stays in control: /memory, /remember, /forget, and a switch to turn it all off
+//    - the user stays in control: the Memory list and switch in Settings -> AI (see, add, delete, turn off)
 //
 //  Privacy rules enforced IN CODE (not just in the prompt): secrets/ID/card numbers are never stored, memories
 //  are only read with a verified token, and the table is only reachable through the server's service key.

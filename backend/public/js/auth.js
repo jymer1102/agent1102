@@ -111,6 +111,7 @@
       localStorage.setItem("agent1102_token", userToken);
       localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
       localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
+      setDisplayName(localStorage.getItem("agent1102_name")); // the name on the sidebar's Settings button
       hidePasswords();
       showApp();
     } catch (err) {
@@ -144,6 +145,9 @@
     authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; // was left on "Loading..." after a successful sign-in
     hidePasswords();
     clearAvatar();
+    clearAccountDisplay(); // name and email belong to the account that just left
+    closeSettings(); // never leave Settings open on top of the sign-in screen
+    agent1102Settings.forgetLoaded(); // and don't keep the last person's AI settings around for the next one
     // easter egg progress belongs to the account, so the next person on this browser starts clean
     if (typeof resetEasterEggs === "function") resetEasterEggs();
   }

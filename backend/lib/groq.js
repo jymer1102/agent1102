@@ -4,8 +4,18 @@
 // ============================================================
 "use strict";
 
+const { AsyncLocalStorage } = require("async_hooks");
+
 const GROQ_URL = () => process.env.GROQ_API_URL || "https://api.groq.com/openai/v1/chat/completions";
-const headers = () => ({ "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` });
+
+// A person can add their own Groq key (Settings -> AI). The server resolves it ONCE per request and runs the request inside
+// runWithKey(); every Groq call made while handling it (the answer, the title, the drawing, memory...) then picks it up from
+// here, so no function has to pass a key around. With no key set, the shared GROQ_API_KEY is used as before.
+const keyContext = new AsyncLocalStorage();
+const runWithKey = (apiKey, next) => keyContext.run({ apiKey, own: true }, next);
+const usingOwnKey = () => !!(keyContext.getStore() && keyContext.getStore().own);
+const currentKey = () => (keyContext.getStore() && keyContext.getStore().apiKey) || process.env.GROQ_API_KEY;
+const headers = () => ({ "Content-Type": "application/json", "Authorization": `Bearer ${currentKey()}` });
 
 // "1m23.4s" / "7.66s" / "850ms" / "60" -> whole seconds (the old code read "1m23s" as 1)
 function parseResetSeconds(v) {
@@ -27,12 +37,19 @@ const AI_NO_REPLY = "The AI didn't send a reply. Please try again.";
 function rateLimitText(resetSeconds) {
   const mins = Math.floor(resetSeconds / 60), secs = resetSeconds % 60;
   const t = mins > 0 ? `${mins} minute${mins !== 1 ? "s" : ""}` : `${secs} second${secs !== 1 ? "s" : ""}`;
-  return `I've hit my usage limit for now. Please try again in ${t}.`;
+  // on the shared key, point at the fix: their own key means their own limits
+  if (usingOwnKey()) return `Your Groq key has reached its usage limit for now. Please try again in ${t}, or check your limits at console.groq.com.`;
+  return `I've hit my usage limit for now. Please try again in ${t}. To get your own usage limits, add your own free Groq API key in Settings, under AI.`;
 }
+const KEY_REJECTED = "Groq didn't accept your API key. Open Settings, go to AI, and update it, or remove it to use the shared key.";
 
 // Turns a failed Groq reply into { status, message } for the client
 function describeError(data, response) {
   const err = data && data.error;
+  // the person's own key was refused (typo, deleted, revoked). 400, not 401: the app treats a 401 as "your login expired".
+  if (usingOwnKey() && ((response && (response.status === 401 || response.status === 403)) || (err && err.code === "invalid_api_key"))) {
+    return { status: 400, message: KEY_REJECTED };
+  }
   if (err && err.code === "rate_limit_exceeded") {
     return { status: 429, message: rateLimitText(parseResetSeconds(response && response.headers.get("x-ratelimit-reset-tokens"))) };
   }
@@ -88,4 +105,4 @@ async function stream(body, onDelta, signal) {
   return full;
 }
 
-module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError, AI_PROBLEM, AI_NO_REPLY };
+module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError, AI_PROBLEM, AI_NO_REPLY, runWithKey, usingOwnKey, authHeaders: headers, KEY_REJECTED };

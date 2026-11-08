@@ -1,4 +1,5 @@
 // The chat itself (POST /chat), plus the style settings (/prefs) and long-term memory (/memory) that feed it.
+// (People manage both from Settings -> AI in the page; there are no chat commands for them any more.)
 // (The code below is moved unchanged from the old single-file server.js; shared things arrive through `ctx`.)
 const groq = require("../lib/groq");
 const P = require("../lib/prompts");
@@ -10,7 +11,7 @@ const { createMemory, MemoryUnavailable, memoryCues } = require("../lib/memory")
 const { verifyReply } = require("../lib/verify");
 
 module.exports = function registerChat(ctx) {
-const { app, supabaseAdmin, auth, userMeta, MSG, fail, L, TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, clip, dropBrokenMathBlocks, generateMathVisual, wantsMathVisual } = ctx;
+const { app, supabaseAdmin, auth, userMeta, userSettings, MSG, fail, L, TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, clip, dropBrokenMathBlocks, generateMathVisual, wantsMathVisual } = ctx;
 
 // Keeps only the newest few images, only accepts inline (data:) images, and reports whether any remain.
 // The browser sends the whole conversation, so nothing in it can be trusted to be what the page would have sent.
@@ -203,9 +204,10 @@ app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
       if (!searchLimiter.allow(user.id)) return quick(`You've used your ${SEARCH_PER_HOUR} web searches for this hour. Try again a bit later. Questions without /search still work.`);
       status("Searching the web...");
     }
-    const [memories, results] = await Promise.all([
+    const [memories, results, personal] = await Promise.all([
       user && style.memory ? memory.relevant(user.id, lastUserText) : [],
       search ? web.searchWeb(cues.stripAttachments(search.query)) : [],
+      user ? userSettings.load(user.id) : null, // Settings -> AI: their written preferences, and whether they use their own Groq key
     ]);
 
     // 2) the prompt
@@ -216,11 +218,11 @@ app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
     if (results.length) parts.push(P.searchBlock(results));
     else if (search) parts.push(P.SEARCH_EMPTY_NOTE);
     else if (domains.length || cues.needsFreshInfo(lastUserText, domains)) parts.push(P.freshnessRule(web.enabled()));
-    parts.push(prefsLib.styleBlock(style), P.memoryBlock(memories));
+    parts.push(prefsLib.styleBlock(style), P.memoryBlock(memories), P.personalBlock(personal), P.usageLimitsRule(!!(personal && personal.hasKey), !!user));
     if (emo.notes.length) parts.push("EMOTION HINTS (automatic guesses, may be wrong):\n" + emo.notes.map(n => "- " + n).join("\n"));
     if (user && mc.remember) parts.push(style.memory
       ? "The user asked you to remember something. Confirm in one short sentence that you will remember it (it is being saved now)."
-      : "The user asked you to remember something, but their memory is switched off. Tell them to type /memory on first, then ask again.");
+      : "The user asked you to remember something, but their memory is switched off. Tell them to turn Memory on in Settings (their profile at the bottom of the sidebar), under AI, then ask again.");
     if (user && style.memory && mc.forget) parts.push("The user asked you to forget something. Confirm in one short sentence that it is being removed from memory.");
     if (fitted.trimmed) parts.push("The oldest part of this long conversation was left out to save space. If the user refers to something you cannot see, say so and ask them to repeat it.");
     if (mentionsJymer) parts.push("The user's latest message is about jymer1102. Include both links, each as a plain URL on its own line: https://jymer1102.github.io/jymer1102 and https://linktr.ee/jymer1102");
