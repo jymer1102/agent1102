@@ -78,8 +78,8 @@ button:disabled { opacity:0.5; cursor:url('images/cursor/custom-j-cursor.png') 2
 .tool-btn { background:var(--surface2); border:1px solid var(--border); color:var(--text); font-size:1.2rem; padding:0 0.9rem; border-radius:12px; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
 
 .tool-btn.recording { background:#e03; color:white; border-color:#e03; }
-#sidebar { position:fixed; top:0; left:-280px; width:280px; height:100%; background:var(--surface); border-right:1px solid var(--border); z-index:100; transition:left 0.25s; display:flex; flex-direction:column; }
-#sidebar.open { left:0; }
+#sidebar { position:fixed; top:0; left:0; width:280px; height:100%; background:var(--surface); border-right:1px solid var(--border); z-index:100; display:flex; flex-direction:column; transform:translateX(-100%); visibility:hidden; } /* slides in and out: see "Sidebar motion" below */
+#sidebar.open { transform:none; visibility:visible; }
 #clear-all-btn { background:#c0392b; border:none; color:white; border-radius:8px; padding:0.3rem 0.6rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.8rem; white-space:nowrap; }
 
 #sidebar-list { flex:1; overflow-y:auto; padding:0.5rem; }
@@ -88,8 +88,8 @@ button:disabled { opacity:0.5; cursor:url('images/cursor/custom-j-cursor.png') 2
 .history-item-title:hover { background:var(--surface2); }
 .delete-chat-btn { background:none; border:none; color:#e74c3c; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.9rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
 .delete-chat-btn:hover { background:#c0392b; color:white; }
-#overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:99; }
-#overlay.show { display:block; }
+#overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:99; opacity:0; visibility:hidden; pointer-events:none; } /* fades: see "Sidebar motion" below */
+#overlay.show { opacity:1; visibility:visible; pointer-events:auto; }
 /* ============================================================
    Default cursor (jymer1102 branding)
    Why it used to fail in places: this generic rule is the weakest in the file, so any element with its own
@@ -221,7 +221,7 @@ button:not(:disabled):not(.auth-toggle):not(.flashcard):not(.cmd-item):hover, .g
 /* Header, footer bar and sidebar get the same cursor-following glow as the cards */
 header { position:relative; isolation:isolate; z-index:5; }
 #input-area { isolation:isolate; }
-header, #input-area, #sidebar { transition:border-color 0.35s var(--ease), box-shadow 0.35s var(--ease); }
+header, #input-area { transition:border-color 0.35s var(--ease), box-shadow 0.35s var(--ease); }
 header::before, #input-area::before, #sidebar::before {
   content:''; position:absolute; inset:0; z-index:-1; pointer-events:none;
   background:radial-gradient(500px circle at var(--mx,50%) var(--my,50%), var(--accent-glow), transparent 60%);
@@ -874,4 +874,26 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
   .settings-head { padding-top:calc(1rem + env(safe-area-inset-top, 0px)); }
   .field-row > .modal-btn { flex:1 1 100%; }
   .danger-card .modal-btn { flex:1 1 100%; }
+}
+
+/* ============================================================
+   Sidebar motion
+   The sidebar slides with transform (smooth, no re-layout) and the dark backdrop fades with it.
+   Opening eases out (quick start, soft landing); closing is a touch quicker so it never feels sluggish.
+   `visibility` flips only AFTER the slide-out ends, so a closed sidebar can't be tabbed into or read aloud by a screen reader.
+   (It has its own complete `transition` here: the glow rule near the top used to set `transition` for the sidebar as well, which
+   replaced the slide and made it jump.)
+   ============================================================ */
+#sidebar {
+  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.26s,
+              border-color 0.35s var(--ease), box-shadow 0.35s var(--ease);
+}
+#sidebar.open {
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s,
+              border-color 0.35s var(--ease), box-shadow 0.35s var(--ease);
+}
+#overlay { transition: opacity 0.26s ease, visibility 0s linear 0.26s; }
+#overlay.show { transition: opacity 0.34s ease, visibility 0s linear 0s; }
+@media (prefers-reduced-motion: reduce) {
+  #sidebar, #sidebar.open, #overlay, #overlay.show { transition-duration: 0.01ms !important; transition-delay: 0s !important; }
 }
