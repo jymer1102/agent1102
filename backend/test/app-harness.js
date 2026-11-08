@@ -46,7 +46,7 @@ async function bootApp({ routes = {}, storage = {}, light = false } = {}) {
   // ---- fake network ----
   const defaults = {
     "/ping": () => ({ status: 200, json: { ok: true } }),
-    "/profile": () => ({ status: 200, json: { name: "Sam", email: "a@b.c" } }),
+    "/profile": () => ({ status: 200, json: { profile: { name: "Sam", email: "a@b.c" } } }), // the real server wraps it as { profile: {...} }
     "/chats": () => ({ status: 200, json: { chats: [], success: true } }),
     "/title": () => ({ status: 200, json: { title: "Test chat" } }),
     "/easter-eggs": () => ({ status: 200, json: {} }),

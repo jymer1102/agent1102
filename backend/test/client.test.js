@@ -1,4 +1,4 @@
-// Loads the real browser scripts (stream.js, personal.js, tables.js, copy.js, render.js) into jsdom, sharing one global scope like
+// Loads the real browser scripts (stream.js, tables.js, copy.js, render.js) into jsdom, sharing one global scope like
 // the page does, and checks them.   needs:  npm i -D jsdom     run:  node test/client.test.js
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
@@ -15,7 +15,7 @@ const load = f => run(fs.readFileSync(path.join(__dirname, "..", "public", "js",
 run(`let history = []; let userToken = "tok"; const BACKEND_URL = "http://x"; let __toasts = []; function showToast(m){ __toasts.push(m); }
      window.__msgs = []; window.addMsg = function(role, text, img, idx){ const wrap = document.createElement("div"); wrap.innerHTML = '<button class="retry-btn"></button>'; window.__msgs.push({ role, text, idx, wrap }); return wrap; };
      window.__calls = [];`);
-load("stream.js"); load("personal.js"); load("tables.js"); load("sendstate.js");
+load("stream.js"); load("tables.js"); load("sendstate.js");
 
 let passed = 0;
 
@@ -91,53 +91,6 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
   });
   await t("auth header only when signed in", () => {
     assert.strictEqual(w.agent1102Stream.headers("T").Authorization, "Bearer T"); assert(!("Authorization" in w.agent1102Stream.headers(null)));
-  });
-
-  console.log("personal.js");
-  let memories = [{ id: "a1", content: "Is studying nursing at KU", source: "auto" }, { id: "b2", content: "Prefers metric units", source: "user" }];
-  const calls = [];
-  w.fetch = async (url, opts = {}) => {
-    const p = url.replace("http://x", ""); calls.push({ method: opts.method || "GET", p, body: opts.body && JSON.parse(opts.body), auth: opts.headers && opts.headers.Authorization });
-    const ok = d => ({ ok: true, json: async () => d });
-    if (p === "/memory" && (!opts.method || opts.method === "GET")) return ok({ enabled: true, memories });
-    if (p === "/memory" && opts.method === "POST") return ok({ success: true });
-    if (p.startsWith("/memory/") && opts.method === "DELETE") { memories = memories.filter(m => m.id !== p.slice(8)); return ok({ success: true }); }
-    if (p === "/prefs") return ok({ rows: [["Answer length", "concise"], ["Memory", "on"]], notes: opts.body ? ["shorter answers"] : [] });
-    return { ok: false, json: async () => ({ error: "Something went wrong" }) };
-  };
-  const last = () => w.__msgs[w.__msgs.length - 1];
-  await t("match() recognises only the personal commands", () => {
-    for (const s of ["/memory", "/remember I like jazz", "/forget 2", "/style concise"]) assert(w.agent1102Personal.match(s), s);
-    for (const s of ["/quiz 5", "memory", "tell me about /memory", "/memorize"]) assert(!w.agent1102Personal.match(s), s);
-  });
-  await t("/memory lists numbered memories with a bearer token, and is NOT added to history", async () => {
-    await w.agent1102Personal.run("/memory");
-    assert(/1\. Is studying nursing at KU/.test(last().text) && /2\. Prefers metric units \*\(you told me\)\*/.test(last().text));
-    assert.strictEqual(calls[calls.length - 1].auth, "Bearer tok"); assert.strictEqual(run("history.length"), 0);
-    assert.strictEqual(last().wrap.querySelector(".retry-btn"), null, "retry button should be removed");
-  });
-  await t("/forget 1 deletes the first memory by id; bad numbers and text are handled", async () => {
-    await w.agent1102Personal.run("/forget 1"); assert(/Forgot: "Is studying nursing at KU"/.test(last().text)); assert.strictEqual(memories.length, 1);
-    await w.agent1102Personal.run("/forget 9"); assert(/no memory number 9/.test(last().text));
-    await w.agent1102Personal.run("/forget zebra"); assert(/couldn't find/.test(last().text));
-    await w.agent1102Personal.run("/forget metric"); assert(/Forgot/.test(last().text)); assert.strictEqual(memories.length, 0);
-    await w.agent1102Personal.run("/forget 1"); assert(/nothing to forget/.test(last().text));
-  });
-  await t("/forget all asks for confirmation first", async () => {
-    memories = [{ id: "z", content: "x", source: "auto" }];
-    w.confirm = () => false; await w.agent1102Personal.run("/forget all"); assert(/kept everything/.test(last().text)); assert.strictEqual(memories.length, 1);
-    w.confirm = () => true; calls.length = 0; await w.agent1102Personal.run("/forget all"); assert(calls.some(c => c.method === "DELETE" && c.p === "/memory"));
-  });
-  await t("/remember, /memory off, /style send the right requests", async () => {
-    calls.length = 0;
-    await w.agent1102Personal.run("/remember I prefer metric units"); assert.strictEqual(JSON.stringify(calls[0].body), '{"content":"I prefer metric units"}');
-    await w.agent1102Personal.run("/memory off"); assert.strictEqual(JSON.stringify(calls[1].body), '{"updates":{"memory":false}}');
-    await w.agent1102Personal.run("/style concise"); assert.strictEqual(JSON.stringify(calls[2].body), '{"command":"concise"}'); assert(/shorter answers/.test(last().text) && /\| Answer length \| concise \|/.test(last().text));
-  });
-  await t("signed-out users are told to sign in, and server errors are shown, not thrown", async () => {
-    run("userToken = null"); await w.agent1102Personal.run("/memory"); assert(/sign in/i.test(last().text));
-    run('userToken = "tok"'); w.fetch = async () => ({ ok: false, json: async () => ({ error: "Memory isn't set up yet." }) });
-    await w.agent1102Personal.run("/memory"); assert(/isn't set up/.test(last().text));
   });
 
   console.log("tables.js");

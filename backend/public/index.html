@@ -44,7 +44,7 @@
 
   <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
   <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
-  <link rel="stylesheet" href="style.css?v=20261030a" />
+  <link rel="stylesheet" href="style.css?v=20261107a" />
 </head>
 
 <body>
@@ -81,30 +81,33 @@
 
 <div id="app">
   <div id="sidebar">
-    <div id="sidebar-header">
-      <i class="fa-regular fa-comment"></i> Chat History
-      <div style="display:flex;gap:0.5rem;align-items:center">
-        <button id="clear-all-btn"><i class="fa-solid fa-trash-can"></i> Clear All</button>
-        <button class="icon-btn" id="close-sidebar"><i class="fa-solid fa-sidebar-close fa-circle-xmark"></i></button>
+    <div id="sidebar-top">
+      <button class="icon-btn" id="new-chat-btn" title="New chat" aria-label="New chat"><i class="fa-solid fa-pencil"></i></button>
+      <div class="sidebar-top-actions">
+        <button id="clear-all-btn" title="Delete all chat history"><i class="fa-solid fa-trash-can"></i> Clear All</button>
+        <button class="icon-btn" id="close-sidebar" title="Close sidebar" aria-label="Close sidebar"><i class="fa-solid fa-sidebar-close fa-circle-xmark"></i></button>
       </div>
     </div>
     <div id="sidebar-list"></div>
+    <div id="sidebar-footer">
+      <button id="settings-btn" title="Settings" aria-label="Open settings" aria-haspopup="dialog">
+        <span class="settings-avatar">
+          <img id="profile-icon" src="" alt="" style="display:none" />
+          <span id="profile-icon-fallback"><i class="fa-solid fa-circle-user"></i></span>
+        </span>
+        <span id="settings-name">Account</span>
+      </button>
+    </div>
   </div>
   <div id="overlay"></div>
   <header>
     <div style="display:flex;gap:0.5rem">
       <button class="icon-btn" id="history-btn" title="Chat history"><i class="fa-solid fa-sidebar-open fa-comment"></i></button>
-      <button class="icon-btn" id="new-chat-btn" title="New chat"><i class="fa-solid fa-pencil"></i></button>
     </div>
     <span class="header-title" id="header-title">agent1102</span>
     <div class="header-btns" id="header-btns">
       <button class="icon-btn" id="theme-btn" title="Toggle theme"><i class="fa-solid fa-moon"></i></button>
       <button class="icon-btn" id="clear-btn" title="Clear chat"><i class="fa-solid fa-trash-can"></i></button>
-      <button class="icon-btn" id="logout-btn" title="Log out"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>
-      <button class="icon-btn" id="profile-btn" title="Profile">
-        <img id="profile-icon" src="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:8px;" />
-        <span id="profile-icon-fallback"><i class="fa-solid fa-circle-user"></i></span>
-      </button>
     </div>
   </header>
   <div id="chat"></div>
@@ -122,28 +125,140 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="profile-modal">
-  <div class="modal-box">
-    <h2 style="font-size:1.2rem;font-weight:600"><i class="fa-solid fa-circle-user"></i> Profile Settings</h2>
-    
-   <div id="profile-upload-section" class="agent1102-glass-panel" style="width: 100%; text-align: center; box-sizing: border-box;">
-      <img id="profile-preview" src="" alt="Profile" width="100" height="100" style="display: block; margin: 0 auto 15px auto; border-radius: 50%; object-fit: cover; border: 2px solid rgba(255,255,255,0.4); background: var(--surface2);" />
-      
-      <label for="avatar-upload" class="glass-btn">Update Photo</label>
-      <input type="file" id="avatar-upload" accept="image/jpeg, image/png, image/webp" style="display:none;" />
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal-box settings-box" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-head">
+      <h2 id="settings-title">Settings</h2>
+      <button class="icon-btn" id="settings-close" title="Close settings" aria-label="Close settings"><i class="fa-solid fa-xmark"></i></button>
     </div>
-    <input type="text" id="profile-name" class="modal-input" placeholder="New name" />
-    <input type="text" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" id="profile-email" class="modal-input" placeholder="New email" />
-    <div class="pw-wrap">
-      <input type="password" id="profile-password" class="modal-input" autocomplete="new-password" placeholder="New password" />
-      <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+
+    <div class="settings-tabs" role="tablist" aria-label="Settings pages">
+      <button type="button" role="tab" id="tab-profile" class="settings-tab" data-page="profile" aria-controls="page-profile" aria-selected="true"><i class="fa-solid fa-circle-user"></i><span>Profile</span></button>
+      <button type="button" role="tab" id="tab-ai" class="settings-tab" data-page="ai" aria-controls="page-ai" aria-selected="false" tabindex="-1"><i class="fa-solid fa-wand-magic-sparkles"></i><span>AI</span></button>
+      <button type="button" role="tab" id="tab-danger" class="settings-tab danger" data-page="danger" aria-controls="page-danger" aria-selected="false" tabindex="-1"><i class="fa-solid fa-triangle-exclamation"></i><span>Danger Zone</span></button>
     </div>
-    <p id="profile-msg" style="font-size:0.85rem;text-align:center;color:var(--text-muted)"></p>
-    <div style="display:flex;gap:0.5rem">
-      <button id="profile-save" class="modal-btn" style="flex:1;background:var(--accent);color:white"><i class="fa-solid fa-floppy-disk"></i> Save</button>
-      <button id="profile-close" class="modal-btn" style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border)"><i class="fa-solid fa-ban"></i> Cancel</button>
+
+    <div class="settings-body">
+
+      <!-- ===== Profile ===== -->
+      <section class="settings-page" id="page-profile" role="tabpanel" aria-labelledby="tab-profile">
+        <h3 class="settings-h"><i class="fa-solid fa-circle-user"></i> Profile</h3>
+
+        <div class="avatar-edit">
+          <div class="avatar-wrap">
+            <img id="profile-preview" src="" alt="Your profile picture" width="104" height="104" />
+            <button type="button" id="avatar-remove" class="avatar-x" title="Remove picture" aria-label="Remove profile picture" hidden><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <label for="avatar-upload" class="glass-btn">Change photo</label>
+          <input type="file" id="avatar-upload" accept="image/jpeg, image/png, image/webp" style="display:none;" />
+        </div>
+
+        <div class="field">
+          <label for="profile-name">Username</label>
+          <div class="field-row">
+            <input type="text" id="profile-name" class="modal-input" maxlength="60" autocomplete="nickname" placeholder="Your name" />
+            <button type="button" id="save-name" class="modal-btn primary">Save</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="profile-email">Email</label>
+          <p class="field-note">Account email: <strong id="profile-email-current">&mdash;</strong></p>
+          <div class="field-row">
+            <input type="text" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" id="profile-email" class="modal-input" placeholder="New email address" />
+            <button type="button" id="save-email" class="modal-btn primary">Change email</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="profile-password">Password</label>
+          <div class="field-row">
+            <div class="pw-wrap">
+              <input type="password" id="profile-password" class="modal-input" autocomplete="new-password" placeholder="New password" />
+              <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+            </div>
+            <button type="button" id="save-password" class="modal-btn primary">Change password</button>
+          </div>
+        </div>
+
+        <p id="profile-msg" class="settings-msg" role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- ===== AI ===== -->
+      <section class="settings-page" id="page-ai" role="tabpanel" aria-labelledby="tab-ai" hidden>
+        <h3 class="settings-h"><i class="fa-solid fa-wand-magic-sparkles"></i> AI</h3>
+
+        <div class="field">
+          <label for="ai-talk">How should the AI talk to you?</label>
+          <textarea id="ai-talk" rows="3" maxlength="1500" placeholder="For example: Keep answers short and friendly. Explain things like I'm a beginner."></textarea>
+        </div>
+        <div class="field">
+          <label for="ai-about">What should the AI know about you?</label>
+          <textarea id="ai-about" rows="3" maxlength="1500" placeholder="For example: I'm a nursing student. I'm learning Python. I like metric units."></textarea>
+        </div>
+        <button type="button" id="ai-save" class="modal-btn primary">Save preferences</button>
+        <p id="ai-msg" class="settings-msg" role="status" aria-live="polite"></p>
+
+        <details class="settings-details" id="memory-details">
+          <summary><i class="fa-solid fa-brain"></i> Saved memories</summary>
+          <div class="details-body">
+            <label class="switch-row"><input type="checkbox" id="memory-toggle" /> <span>Remember lasting facts from our chats</span></label>
+            <ul id="memory-list" class="memory-list"></ul>
+            <p id="memory-empty" class="field-note">Nothing saved yet. The AI picks up lasting facts as you chat.</p>
+            <div class="field-row">
+              <button type="button" id="memory-clear" class="modal-btn subtle">Forget everything</button>
+              <button type="button" id="style-reset" class="modal-btn subtle">Reset learned style</button>
+            </div>
+          </div>
+        </details>
+
+        <div class="field key-section">
+          <div class="key-title">
+            <label for="groq-key">Use your own Groq API key</label>
+            <span class="badge-suggested">Suggested</span>
+          </div>
+          <p class="field-note">With your own key, the AI uses your own usage limits instead of the shared ones, so you're much less likely to get slowed down.</p>
+          <p id="groq-status" class="key-status" role="status" aria-live="polite">Using the shared key.</p>
+          <div class="field-row">
+            <div class="pw-wrap">
+              <input type="password" id="groq-key" class="modal-input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="gsk_..." />
+              <button type="button" class="pw-toggle" aria-label="Show key" aria-pressed="false" title="Show key"><i class="fa-solid fa-eye"></i></button>
+            </div>
+            <button type="button" id="groq-save" class="modal-btn primary">Save key</button>
+          </div>
+          <button type="button" id="groq-remove" class="modal-btn subtle" hidden>Remove my key</button>
+          <p id="groq-msg" class="settings-msg" role="status" aria-live="polite"></p>
+
+          <details class="settings-details">
+            <summary><i class="fa-solid fa-circle-question"></i> How do I get a key?</summary>
+            <div class="details-body">
+              <ol class="steps">
+                <li>Go to <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer">console.groq.com</a> and sign up or log in. It's free.</li>
+                <li>Open the <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">API Keys page</a> and tap <strong>Create API Key</strong>.</li>
+                <li>Give it any name (like &ldquo;agent1102&rdquo;) and tap <strong>Submit</strong>.</li>
+                <li>Copy the key right away. It starts with <code>gsk_</code> and Groq only shows it once.</li>
+                <li>Paste it into the box above and tap <strong>Save key</strong>.</li>
+              </ol>
+              <p class="field-note">Your key is stored encrypted and is only used for your own requests. Remove it any time to go back to the shared key.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- ===== Danger Zone ===== -->
+      <section class="settings-page" id="page-danger" role="tabpanel" aria-labelledby="tab-danger" hidden>
+        <h3 class="settings-h danger"><i class="fa-solid fa-triangle-exclamation"></i> Danger Zone</h3>
+        <div class="danger-card">
+          <div><strong>Log out</strong><p>Sign out on this device. Your chats stay saved.</p></div>
+          <button type="button" id="logout-btn" class="modal-btn danger-outline"><i class="fa-solid fa-arrow-right-from-bracket"></i> Log out</button>
+        </div>
+        <div class="danger-card">
+          <div><strong>Delete account</strong><p>Permanently deletes your account, chats, memories and settings. This can't be undone.</p></div>
+          <button type="button" id="profile-delete" class="modal-btn danger-solid"><i class="fa-solid fa-trash-can"></i> Delete account</button>
+        </div>
+      </section>
+
     </div>
-    <button id="profile-delete" class="modal-btn" style="width:100%;background:#c0392b;color:white"><i class="fa-solid fa-trash-can"></i> Delete Account</button>
   </div>
 </div>
 
@@ -163,9 +278,9 @@
 <script src="js/study.js?v=20261020a"></script>
 <script src="js/stream.js?v=20261029a"></script>
 <script src="js/commands.js?v=20261030a"></script>
-<script src="js/personal.js?v=20261020a"></script>
 <script src="js/auth.js?v=20261021a"></script>
-<script src="js/profile.js?v=20261020a"></script>
+<script src="js/profile.js?v=20261107a"></script>
+<script src="js/settings.js?v=20261107a"></script>
 <script src="js/ui.js?v=20261021b"></script>
 <script src="js/sendstate.js?v=20261020a"></script>
 <script src="js/chat.js?v=20261030a"></script>

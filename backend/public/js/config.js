@@ -34,12 +34,9 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   const headerBtns = document.getElementById("header-btns");
   const headerTitle = document.getElementById("header-title");
   const logoutBtn = document.getElementById("logout-btn");
-  const profileModal = document.getElementById("profile-modal");
-  const profileBtn = document.getElementById("profile-btn");
-  const profileClose = document.getElementById("profile-close");
-  const profileSave = document.getElementById("profile-save");
+  const settingsModal = document.getElementById("settings-modal");
+  const settingsBtn = document.getElementById("settings-btn");
   const profileDelete = document.getElementById("profile-delete");
-  const profileMsg = document.getElementById("profile-msg");
   const avatarInput = document.getElementById("avatar-upload");
   const avatarPreview = document.getElementById("profile-preview");
 

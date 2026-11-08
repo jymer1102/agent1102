@@ -3,7 +3,7 @@
 const express = require("express");
 
 module.exports = function registerAuth(ctx) {
-const { app, supabase, supabaseAdmin, auth, MSG, fail, friendlyAuthError, L } = ctx;
+const { app, supabase, supabaseAdmin, auth, needUser, MSG, fail, friendlyAuthError, L } = ctx;
 
 // --- AUTH ---
 app.post("/auth/refresh", L.refresh, async (req, res) => {
@@ -138,6 +138,15 @@ app.post("/auth/avatar",
     res.json({ success: true, avatar_url });
   }
 );
+
+// The small x on the profile picture: remove it, and the person goes back to the default icon.
+app.delete("/auth/avatar", needUser, async (req, res) => {
+  const userId = req.user.id;
+  const { error } = await supabaseAdmin.from("profiles").update({ avatar_url: null, updated_at: new Date().toISOString() }).eq("id", userId);
+  if (error) return fail(res, 500, MSG.generic, error);
+  await removeUserAvatars(userId).catch(err => console.warn("Avatar cleanup failed:", err.message)); // no file left behind
+  res.json({ success: true });
+});
 
 app.delete("/auth/delete", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
