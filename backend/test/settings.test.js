@@ -79,6 +79,17 @@ const openSettings = async (app, page) => {
     assert(app.$("#tab-danger").classList.contains("danger") && app.$("#page-danger .settings-h").classList.contains("danger"));
     for (const p of ["profile", "ai", "danger"]) assert(app.$("#page-" + p + " .settings-h svg, #page-" + p + " .settings-h i"), p + " page has its icon next to its title");
   }));
+  await t("the AI page uses the real Font Awesome brain (kept as is), while the other tabs keep their Reicon drawings", () => withApp({}, async app => {
+    const tabIcon = app.$("#tab-ai i"), headIcon = app.$("#page-ai .settings-h i");
+    for (const el of [tabIcon, headIcon]) {
+      assert(el, "the icon is still an <i>");
+      assert(el.classList.contains("fa-brain") && el.classList.contains("fa-solid") && el.classList.contains("fa-keep"), el.className);
+      assert.strictEqual(el.querySelector("svg"), null, "not replaced by a Reicon drawing");
+    }
+    assert(!app.w.document.querySelector(".fa-wand-magic-sparkles"), "the wand is gone");
+    assert(app.$("#tab-profile svg.ri-glyph") && app.$("#tab-danger svg.ri-glyph"), "the other tabs are unchanged");
+    assert(app.$("#memory-details summary svg.ri-glyph"), "Saved memories keeps its own icon, so the page doesn't show the same brain twice");
+  }));
   await t("tabs switch pages, and the arrow keys move between them", () => withApp({ routes: baseRoutes() }, async app => {
     await openSettings(app, "ai");
     assert(!app.$("#page-ai").hidden && app.$("#page-profile").hidden);
