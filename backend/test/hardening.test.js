@@ -276,6 +276,28 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     });
   }
 
+  console.log("\nsidebar motion (style.css)");
+  {
+    const fs = require("fs"), path = require("path");
+    const css = fs.readFileSync(path.join(__dirname, "..", "public", "style.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sels: m[1].split(",").map(x => x.trim()), body: m[2] }));
+    // the LAST rule that sets `transition` for a selector is the one that applies (same specificity, later wins)
+    const lastTransition = sel => { const r = rules.filter(x => x.sels.includes(sel) && /(^|[;\s])transition\s*:/.test(x.body)); return r.length ? r[r.length - 1].body.match(/transition\s*:([^;]*)/)[1] : ""; };
+    await t("nothing later in the stylesheet can cancel the sidebar's slide or the backdrop's fade (a later rule once did, so it jumped)", () => {
+      for (const sel of ["#sidebar", "#sidebar.open"]) { const tr = lastTransition(sel); assert(/transform/.test(tr), `${sel}: the transition that wins is "${tr.trim()}" (no transform, so it would jump)`); assert(/visibility/.test(tr), sel + " must hide itself only after sliding out"); }
+      for (const sel of ["#overlay", "#overlay.show"]) assert(/opacity/.test(lastTransition(sel)), `${sel}: the backdrop must fade`);
+    });
+    await t("the closed sidebar rests off-screen and hidden, and the backdrop never uses display:none (which can't animate)", () => {
+      const rule = sel => rules.filter(x => x.sels.includes(sel)).map(x => x.body).join(";");
+      assert(/translateX\(-100%\)/.test(rule("#sidebar")) && /visibility\s*:\s*hidden/.test(rule("#sidebar")));
+      assert(/transform\s*:\s*none/.test(rule("#sidebar.open")) && /visibility\s*:\s*visible/.test(rule("#sidebar.open")));
+      assert(!/display\s*:\s*none/.test(rule("#overlay")) && !/display\s*:\s*block/.test(rule("#overlay.show")), "toggling display can't fade");
+    });
+    await t("people who ask their phone to reduce motion get no animation", () => {
+      assert(/prefers-reduced-motion\s*:\s*reduce\)\s*\{[^{}]*#sidebar[^{}]*\{[^}]*transition-duration/.test(css));
+    });
+  }
+
   console.log(`\n${passed} passed${failed ? `, ${failed} failed` : ""}`);
   process.exit(failed ? 1 : 0);
 })();
