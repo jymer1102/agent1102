@@ -81,7 +81,12 @@
     settingsModal.classList.remove("open");
     $("profile-password").value = ""; $("groq-key").value = ""; // nothing secret is left sitting in a hidden box
     hidePasswords();
-    if (returnFocus && typeof returnFocus.focus === "function" && document.contains(returnFocus)) returnFocus.focus();
+    // Put focus back where it came from. The Settings button lives in the sidebar, which closed when this window opened, so it usually
+    // can't take focus any more: then use the button that opens the sidebar. (Check that the focus really landed: a hidden element
+    // keeps focus until the next repaint, so "is anything focused?" would be answered too early.)
+    let restored = false;
+    if (returnFocus && typeof returnFocus.focus === "function" && document.contains(returnFocus)) { returnFocus.focus(); restored = document.activeElement === returnFocus; }
+    if (!restored) { const h = document.getElementById("history-btn"); if (h) h.focus(); }
     returnFocus = null;
   }
   window.closeSettings = closeSettings;
