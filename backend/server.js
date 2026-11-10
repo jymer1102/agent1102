@@ -75,7 +75,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const auth = createAuth(supabase); // verified-user lookup (cached), used by /chat, /memory and /prefs
+const auth = createAuth(supabase, { ttlMs: Number(process.env.AUTH_CACHE_MS) || undefined }); // (AUTH_CACHE_MS only lets tests shorten how long a sign-in is remembered) // verified-user lookup (cached), used by /chat, /memory and /prefs
 
 // ============================================================
 //  Messages people see
@@ -111,6 +111,9 @@ function friendlyAuthError(error, fallback) {
     return min ? `Your password needs to be at least ${min[1]} characters.` : "That password is too weak. Please choose a longer one.";
   }
   if (code === "same_password" || has(/different from the old password/i)) return "Your new password must be different from your current one.";
+  if (code === "reauthentication_needed" || has(/requires reauthentication/i)) return "For your security I need to email you a confirmation code first. Tap \"Send confirmation code\", then enter the code.";
+  if (code === "reauthentication_not_valid" || code === "otp_expired" || has(/nonce|token has expired or is invalid|otp.*expired/i)) return "That code isn't right, or it has expired. Check your newest email, or ask for a new code.";
+  if (code === "email_address_not_authorized" || has(/not authorized/i)) return "I can't send email to that address right now. Please try a different one, or try again later.";
   if (code === "email_address_invalid" || has(/unable to validate email|invalid format|email address .* is invalid/i)) return "That email address doesn't look right. Please check it and try again.";
   if (code === "over_request_rate_limit" || code === "over_email_send_rate_limit" || (error && error.status === 429) || has(/rate limit|for security purposes/i)) return "Too many attempts. Please wait a minute and try again.";
   if (code === "signup_disabled" || has(/signups? (not allowed|are disabled)/i)) return "New sign-ups are turned off right now.";
@@ -176,6 +179,12 @@ const L = {
   loginIp: createLimiter({ windowMs: 15 * MIN, max: 40, key: ipKey, skipSuccessful: true, message: slowDown("Too many sign-in attempts.") }),
   signupIp: createLimiter({ windowMs: 60 * MIN, max: 10, key: ipKey, message: slowDown("Too many sign-up attempts.") }),
   signupEmail: createLimiter({ windowMs: 60 * MIN, max: 5, key: emailKey, message: slowDown("Too many sign-up attempts for that email.") }),
+  // emails Supabase sends for someone who isn't signed in (reset link, resend confirmation): per address, and per person asking
+  emailIp: createLimiter({ windowMs: 60 * MIN, max: 12, key: ipKey, message: slowDown("Too many email requests from here. Please try again later.") }),
+  emailAddr: createLimiter({ windowMs: 60 * MIN, max: 4, key: emailKey, message: slowDown("Too many emails to that address. Please wait before asking again.") }),
+  // emails and codes for someone who IS signed in (change email, send code), and tries at entering a code
+  emailPerson: createLimiter({ windowMs: 60 * MIN, max: 8, key: personKey, message: slowDown("Too many emails requested. Please wait a while before trying again.") }),
+  codeTries: createLimiter({ windowMs: 15 * MIN, max: 10, key: personKey, message: slowDown("Too many tries. Please wait a few minutes.") }),
   refresh: createLimiter({ windowMs: 15 * MIN, max: 120, key: ipKey, message: slowDown("Too many requests.") }),
   scores: createLimiter({ windowMs: 10 * MIN, max: 60, key: ipKey, message: slowDown("Too many scores sent.") }),
   chat: createLimiter({ windowMs: MIN, max: 30, key: signedInKey, message: slowDown("You're sending messages very quickly.") }),
@@ -202,12 +211,15 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 const ROOT = __dirname;
 const { TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST } = require("./lib/models");
 const { SYSTEM_PROMPT, MATH_VISUALS_GUIDE } = require("./lib/system-prompt");
+// This site's own address (SITE_URL may hold several comma-separated ones: the first is the main one). Every link in the emails
+// Supabase sends (confirm sign-up, reset password, confirm email change) is told to come back to <this>/auth/callback.
+const siteUrl = () => String(process.env.SITE_URL || "https://agent1102.onrender.com").split(",")[0].trim().replace(/\/+$/, "");
 const userMeta = createUserMeta({ supabaseAdmin, auth });
 // People can store their own Groq key. It is encrypted with a key derived from KEY_ENCRYPTION_SECRET, or else from the service key.
 const secretBox = createSecretBox(process.env.KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_KEY);
 const userSettings = createUserSettings({ supabaseAdmin, box: secretBox, ttlMs: Number(process.env.SETTINGS_CACHE_MS) || 60 * 1000 }); // (the cache is cleared whenever the person saves a change; the env variable only lets tests shorten it)
 const ctx = {
-  app, supabase, supabaseAdmin, auth, userMeta, userSettings, MSG, fail, UserError, friendlyAuthError, needUser, L,
+  app, supabase, supabaseAdmin, auth, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
   TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, MATH_VISUALS_GUIDE, ROOT,
 };
 // Requests that call the AI run with the person's own Groq key if they saved one (otherwise the shared key, as before).
@@ -230,6 +242,7 @@ require("./routes/auth")(ctx);
 require("./routes/eggs")(ctx);
 require("./routes/scores")(ctx);
 require("./routes/settings")(ctx);
+require("./routes/authemail")(ctx);
 require("./routes/chats")(ctx);
 
 // --- ERROR HANDLER ---

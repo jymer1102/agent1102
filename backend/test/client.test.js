@@ -222,7 +222,8 @@ const ev = o => `data: ${JSON.stringify(o)}\n\n`;
     // jsdom can't navigate, so record where the script tried to go
     let went = null;
     d.window.eval("window.__nav = []"); 
-    const code = publicJs("oauth-callback.js").replace(/window\.location\.href\s*=\s*([^;]+);/g, "window.__nav.push($1);");
+    // (the page leaves with location.replace(...), not href=, so the address that holds the tokens isn't kept in the back button's history)
+    const code = publicJs("oauth-callback.js").replace(/window\.location\.replace\(([^)]+)\)/g, "window.__nav.push($1)");
     new vm.Script(code).runInContext(d.getInternalVMContext());
     went = JSON.stringify(Array.from(d.window.__nav));
     return { storage: d.window.localStorage, went };

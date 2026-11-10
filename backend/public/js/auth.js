@@ -58,16 +58,43 @@
   document.getElementById("discord-btn").addEventListener("click", () => { agent1102Session.begin(authStay.checked); window.location.href = `${BACKEND_URL}/auth/oauth/discord`; });
   document.getElementById("github-btn").addEventListener("click", () => { agent1102Session.begin(authStay.checked); window.location.href = `${BACKEND_URL}/auth/oauth/github`; });
 
-  authToggle.addEventListener("click", () => {
-    isSignUp = !isSignUp;
-    authName.style.display = isSignUp ? "block" : "none";
-    authPhone.style.display = isSignUp ? "block" : "none";
-    authSubtitle.textContent = isSignUp ? "Create an account" : "Sign in to your account";
-    authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In";
-    authToggle.textContent = isSignUp ? "Already have an account? Sign in" : "Don't have an account? Sign up";
-    authPassword.autocomplete = isSignUp ? "new-password" : "current-password"; // tells the password manager whether to fill or suggest
+  // The sign-in box has four modes, and this one function decides what each of them shows:
+  //   signin  email + password                 signup  name, email, password + confirm
+  //   forgot  email only: emails a reset link  reset   a new password + confirm, after opening that link
+  let mode = "signin";
+  const SUBMIT_TEXT = { signin: "Sign In", signup: "Sign Up", forgot: "Send reset link", reset: "Save new password" };
+  const SUBTITLE = { signin: "Sign in to your account", signup: "Create an account", forgot: "Reset your password", reset: "Choose a new password" };
+  const TOGGLE_TEXT = { signin: "Don't have an account? Sign up", signup: "Already have an account? Sign in", forgot: "Back to sign in", reset: "" };
+  const NO_SERVER = "I can't reach the server right now. Check your connection and try again in a moment.";
+  const LINK_EXPIRED = "That link has expired or was already used. Ask for a new one.";
+
+  function setMode(next) {
+    mode = next;
+    const signup = next === "signup", forgot = next === "forgot", reset = next === "reset", plain = next === "signin" || signup;
+    authName.style.display = signup ? "block" : "none";
+    authPhone.style.display = signup ? "block" : "none";
+    authEmail.style.display = reset ? "none" : "block";
+    authPasswordWrap.style.display = forgot ? "none" : "flex";
+    authConfirmWrap.style.display = signup || reset ? "flex" : "none";
+    authStayLabel.style.display = plain ? "flex" : "none";
+    authSocial.style.display = plain ? "flex" : "none";
+    authForgot.hidden = next !== "signin";
+    authResend.hidden = true; // only offered when a confirmation email is what's missing
+    authToggle.style.display = reset ? "none" : "";
+    authSubtitle.textContent = SUBTITLE[next];
+    authSubmit.textContent = SUBMIT_TEXT[next];
+    authToggle.textContent = TOGGLE_TEXT[next];
+    authPassword.autocomplete = signup || reset ? "new-password" : "current-password"; // tells the password manager whether to fill or suggest
+    authPassword.placeholder = reset ? "New password" : "Password";
+    if (forgot || reset) authPassword.value = "";
+    authConfirm.value = "";
+    hidePasswords();
     setAuthMessage("");
-  });
+  }
+
+  authToggle.addEventListener("click", () => setMode(mode === "signin" ? "signup" : "signin"));
+  authForgot.addEventListener("click", () => setMode("forgot"));
+  authResend.addEventListener("click", () => resendConfirmation());
 
   // Submitting the <form> (button or Enter key) signs in / up. Using a real form submit is what lets the
   // browser offer to save the password and autofill it next time.
@@ -80,27 +107,33 @@
   }
   function resetAuthButton() {
     authSubmit.disabled = false;
-    authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In";
+    authSubmit.textContent = SUBMIT_TEXT[mode];
   }
+  const busyAuthButton = () => { authSubmit.disabled = true; authSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin-pulse"></i> Loading...'; };
+  const postJson = (path, body, token) => fetch(`${BACKEND_URL}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "Authorization": `Bearer ${token}` } : {}) }, body: JSON.stringify(body),
+  });
 
   async function submitAuth() {
+    if (mode === "forgot") return submitForgot();
+    if (mode === "reset") return submitReset();
+    const signup = mode === "signup";
     const email = authEmail.value.trim();
     const password = authPassword.value.trim();
+    const confirmPassword = authConfirm.value.trim();
     const name = authName.value.trim();
     const phone = authPhone.value.trim();
-    if (!email || !password || (isSignUp && !name)) { setAuthMessage(isSignUp ? "Please fill in your name, email and password." : "Please enter your email and password."); return; }
-    authSubmit.disabled = true; authSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin-pulse"></i> Loading...';
+    if (!email || !password || (signup && !name)) { setAuthMessage(signup ? "Please fill in your name, email and password." : "Please enter your email and password."); return; }
+    if (signup && password !== confirmPassword) { setAuthMessage(confirmPassword ? "The two passwords don't match. Please type them again." : "Please type your password a second time to confirm it."); return; }
+    busyAuthButton();
     try {
-      const res = await fetch(`${BACKEND_URL}${isSignUp ? "/auth/signup" : "/auth/login"}`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name, phone }),
-      });
+      const res = await postJson(signup ? "/auth/signup" : "/auth/login", signup ? { email, password, confirmPassword, name, phone } : { email, password, name, phone });
       const data = await res.json().catch(() => ({}));
-      if (data.error) { setAuthMessage(data.error); resetAuthButton(); return; }
+      if (data.error) { setAuthMessage(data.error); authResend.hidden = !data.needsConfirmation; resetAuthButton(); return; }
       if (!data.session) {
         // Supabase's "Confirm email" setting is on: the account was created but
         // needs email confirmation before it gets a session.
-        if (data.needsConfirmation) setAuthMessage("Almost there! Check your email for a confirmation link, then come back and sign in.", true);
+        if (data.needsConfirmation) { setAuthMessage(`Almost there! I sent a confirmation link to ${email}. Open it and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true); authResend.hidden = false; }
         else setAuthMessage("I couldn't sign you in. Please try again.");
         resetAuthButton();
         return;
@@ -116,7 +149,64 @@
       showApp();
     } catch (err) {
       console.error("Sign-in request failed:", err);
-      setAuthMessage("I can't reach the server right now. Check your connection and try again in a moment.");
+      setAuthMessage(NO_SERVER);
+      resetAuthButton();
+    }
+  }
+
+  // "Forgot password?": Supabase emails a link. The answer is the same whether or not the address has an account.
+  async function submitForgot() {
+    const email = authEmail.value.trim();
+    if (!email) { setAuthMessage("Please type the email address you signed up with."); return; }
+    busyAuthButton();
+    try {
+      const data = await (await postJson("/auth/forgot", { email })).json().catch(() => ({}));
+      if (data.error) setAuthMessage(data.error);
+      else setAuthMessage(data.message || "If there's an account for that email, I've sent it a message.", true);
+    } catch { setAuthMessage(NO_SERVER); }
+    resetAuthButton();
+  }
+
+  // "Sign-up email didn't arrive": send it again
+  async function resendConfirmation() {
+    const email = authEmail.value.trim();
+    if (!email) { setAuthMessage("Type your email address above, then ask me to send it again."); return; }
+    authResend.disabled = true;
+    try {
+      const data = await (await postJson("/auth/resend", { email })).json().catch(() => ({}));
+      if (data.error) setAuthMessage(data.error);
+      else setAuthMessage(data.message || "I've sent it again.", true);
+    } catch { setAuthMessage(NO_SERVER); }
+    setTimeout(() => { authResend.disabled = false; }, 30000); // no hammering the button
+  }
+
+  // After opening the reset link: oauth-callback.js kept that link's login for THIS tab only (sessionStorage) and sent the person
+  // here. It is used for one thing, setting the new password, and only then becomes a normal sign-in.
+  const recoveryTokens = () => { try { return JSON.parse(sessionStorage.getItem("agent1102_recovery") || "null"); } catch (_) { return null; } };
+
+  async function submitReset() {
+    const rec = recoveryTokens();
+    if (!rec || !rec.a) { setMode("forgot"); setAuthMessage(LINK_EXPIRED); return; }
+    const password = authPassword.value.trim(), confirmPassword = authConfirm.value.trim();
+    if (!password) { setAuthMessage("Please type your new password."); return; }
+    if (password !== confirmPassword) { setAuthMessage("The two passwords don't match. Please type them again."); return; }
+    busyAuthButton();
+    try {
+      const res = await postJson("/auth/password", { password, confirmPassword }, rec.a);
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) { sessionStorage.removeItem("agent1102_recovery"); setMode("forgot"); setAuthMessage(LINK_EXPIRED); resetAuthButton(); return; }
+      if (!res.ok || data.error) { setAuthMessage(data.error || "I couldn't change your password. Please try again."); resetAuthButton(); return; }
+      sessionStorage.removeItem("agent1102_recovery");
+      agent1102Session.begin(true);
+      userToken = rec.a;
+      localStorage.setItem("agent1102_token", userToken);
+      if (rec.r) localStorage.setItem("agent1102_refresh_token", rec.r);
+      setMode("signin"); // so the reset form isn't what's waiting after the next sign-out
+      await showApp();
+      showToast('<span class="toast-success">Password changed. You\'re signed in. <i class="fa-solid fa-circle-check"></i></span>');
+    } catch (err) {
+      console.error("Password reset failed:", err);
+      setAuthMessage(NO_SERVER);
       resetAuthButton();
     }
   }
@@ -142,7 +232,8 @@
     authStay.checked = agent1102Session.stay(); // the box shows this device's last choice
     authPassword.value = "";
     setAuthMessage("");
-    authSubmit.disabled = false; authSubmit.textContent = isSignUp ? "Sign Up" : "Sign In"; // was left on "Loading..." after a successful sign-in
+    authSubmit.disabled = false; authSubmit.textContent = SUBMIT_TEXT[mode]; // was left on "Loading..." after a successful sign-in
+    authConfirm.value = "";
     hidePasswords();
     clearAvatar();
     clearAccountDisplay(); // name and email belong to the account that just left
@@ -152,16 +243,40 @@
     if (typeof resetEasterEggs === "function") resetEasterEggs();
   }
 
-  // The server sends people back to /?error=oauth_failed when Discord/GitHub sign-in doesn't complete
+  // Where the links in the emails (and a failed Discord/GitHub sign-in) send people back to the page. oauth-callback.js sets these.
+  const NOTICES = {
+    confirmed: ["Your email is confirmed. You're signed in.", "ok"],
+    email_changed: ["Your email address was changed.", "ok"],
+    email_pending: ["One more step: open the link I sent to your OTHER address too, and the change will go through.", "info"],
+    link_invalid: [LINK_EXPIRED, "error"],
+  };
+  const returningFromResetLink = new URLSearchParams(window.location.search).get("reset") === "1";
+
   window.addEventListener("DOMContentLoaded", () => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("error") !== "oauth_failed") return;
-    setAuthMessage("That sign-in didn't work. Please try again, or sign in with your email and password.");
-    params.delete("error");
-    const rest = params.toString();
-    history.replaceState(null, "", window.location.pathname + (rest ? "?" + rest : "") + window.location.hash);
+    const clean = (...names) => {
+      names.forEach(n => params.delete(n));
+      const rest = params.toString();
+      window.history.replaceState(null, "", window.location.pathname + (rest ? "?" + rest : "") + window.location.hash);
+    };
+    if (params.get("error") === "oauth_failed") {
+      setAuthMessage("That sign-in didn't work. Please try again, or sign in with your email and password.");
+      clean("error");
+    }
+    if (returningFromResetLink) {
+      clean("reset");
+      if (recoveryTokens()) { appEl.style.display = "none"; authScreen.style.display = "flex"; setMode("reset"); }
+      else { setMode("forgot"); setAuthMessage(LINK_EXPIRED); }
+    }
+    const notice = NOTICES[params.get("notice")];
+    if (notice) {
+      clean("notice");
+      const [text, kind] = notice;
+      if (userToken) showToast(agent1102Render.escapeHtml(text));
+      else { if (kind === "error") { setMode("signin"); authResend.hidden = false; } setAuthMessage(text, kind !== "error"); }
+    }
   });
 
   // Wait for DOMContentLoaded so profile.js / chat.js (loaded after this file) are defined
-  // before showApp() calls into them.
-  if (userToken) window.addEventListener("DOMContentLoaded", showApp);
+  // before showApp() calls into them. (Not when someone just opened a reset link: they set a new password first.)
+  if (userToken && !(returningFromResetLink && recoveryTokens())) window.addEventListener("DOMContentLoaded", showApp);

@@ -3,7 +3,7 @@
 const express = require("express");
 
 module.exports = function registerAuth(ctx) {
-const { app, supabase, supabaseAdmin, auth, needUser, MSG, fail, friendlyAuthError, L } = ctx;
+const { app, supabase, supabaseAdmin, auth, needUser, MSG, fail, friendlyAuthError, L, siteUrl } = ctx;
 
 // --- AUTH ---
 app.post("/auth/refresh", L.refresh, async (req, res) => {
@@ -22,58 +22,40 @@ app.post("/auth/refresh", L.refresh, async (req, res) => {
 });
 
 const MAX_NAME = 60;
-const looksLikeEmail = e => typeof e === "string" && e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+// Only the NAME is changed here. Email and password changes are not instant any more: they go through the emails Supabase sends
+// (a confirmation link for a new email address, a 6-digit code for a new password). See routes/authemail.js.
 app.post("/auth/update", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
   const body = req.body || {};
-  // check what was sent before anything is saved (these values end up in the account, the profile and every saved chat)
-  if (["name", "email", "password"].some(k => body[k] != null && typeof body[k] !== "string")) return res.status(400).json({ error: "Those details don't look right. Please check them and try again." });
+  if (body.email != null || body.password != null) {
+    return res.status(400).json({ error: "To change your email or password, use the confirmation emails in Settings." });
+  }
+  if (body.name != null && typeof body.name !== "string") return res.status(400).json({ error: "Those details don't look right. Please check them and try again." });
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  const email = typeof body.email === "string" ? body.email.trim() : "";
-  const password = typeof body.password === "string" ? body.password : "";
+  if (!name) return res.status(400).json({ error: "Please type the name you'd like to use." });
   if (name.length > MAX_NAME) return res.status(400).json({ error: `Names can be up to ${MAX_NAME} characters.` });
-  if (email && !looksLikeEmail(email)) return res.status(400).json({ error: "That email address doesn't look right." });
-  if (password && password.length > 128) return res.status(400).json({ error: "That password is too long." });
   const { data: userData, error: authErr } = await supabase.auth.getUser(token);
   if (authErr || !userData.user) {
     return res.status(401).json({ error: MSG.session });
   }
   const user = userData.user;
-  const updates = {};
-  if (email) updates.email = email;
-  if (password) updates.password = password;
-  // the admin API calls this field user_metadata ("data" is only for the signed-in-user API and was silently ignored here)
-  if (name) updates.user_metadata = { ...user.user_metadata, name };
-  const { data, error } = await supabaseAdmin.auth.admin.updateUserById(user.id, updates);
-  if (error) return res.status(error.status && error.status < 500 ? 400 : 500).json({ error: friendlyAuthError(error, "I couldn't save those changes. Please try again.") });
-  auth.invalidate(user.id); // so the next request sees the new details, not a copy cached up to five minutes ago
-  // a new password or email should end every OTHER signed-in session (a thief's, or an old phone); this one stays
-  if ((email || password) && token) {
-    Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(token, "others")).catch(e => console.warn("Signing out other sessions failed:", e.message));
+  try {
+    // user_metadata is where Supabase keeps it; the helper re-reads it first so a change made at the same moment isn't lost
+    await ctx.userMeta.patch(user.id, { name });
+  } catch (e) {
+    return fail(res, 500, "I couldn't save those changes. Please try again.", e);
   }
 
   // keep profiles table in sync
-  if (name || email) {
-    await supabaseAdmin.from("profiles").upsert({
-      id: user.id,
-      ...(name && { name }),
-      ...(email && { email }),
-      updated_at: new Date().toISOString()
-    });
-  }
-
+  await supabaseAdmin.from("profiles").upsert({ id: user.id, name, updated_at: new Date().toISOString() });
   // keep the username on the score tables in sync too
-  if (name) {
-    await Promise.all(["trex_highscores", "pacman_highscores"].map(table =>
-      supabaseAdmin.from(table).update({ username: name }).eq("user_id", user.id)
-    ));
-  }
+  await Promise.all(["trex_highscores", "pacman_highscores"].map(table =>
+    supabaseAdmin.from(table).update({ username: name }).eq("user_id", user.id)
+  ));
   // and the identity columns on saved chats (ignore errors if the columns aren't added yet)
-  if (name || email) {
-    await supabaseAdmin.from("chats").update({ ...(name && { username: name }), ...(email && { email }) }).eq("user_id", user.id).then(() => {}, () => {});
-  }
+  await supabaseAdmin.from("chats").update({ username: name }).eq("user_id", user.id).then(() => {}, () => {});
 
-  res.json({ success: true, user: data.user });
+  res.json({ success: true });
 });
 
 // --- AVATARS ---
@@ -172,11 +154,9 @@ app.delete("/auth/delete", async (req, res) => {
 app.get("/auth/oauth/:provider", async (req, res) => {
   const { provider } = req.params;
   if (!/^[a-z0-9_]{1,30}$/.test(provider)) return res.status(400).json({ error: "I couldn't start that sign-in. Please try again." });
-  // SITE_URL may hold several comma-separated addresses (see lib/security.js): the first is this site's own
-  const site = String(process.env.SITE_URL || "https://agent1102.onrender.com").split(",")[0].trim().replace(/\/+$/, "");
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider,
-    options: { redirectTo: `${site}/auth/callback` }
+    options: { redirectTo: `${siteUrl()}/auth/callback` }
   });
   if (error) return fail(res, 400, "I couldn't start that sign-in. Please try again.", error);
   res.redirect(data.url);
@@ -194,10 +174,12 @@ app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
   const phone = typeof req.body.phone === "string" ? req.body.phone.trim().slice(0, 30) : undefined;
   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
   if (typeof email !== "string" || typeof password !== "string" || email.length > 254 || password.length > 128) return res.status(400).json({ error: "Please check your email and password and try again." });
+  if (req.body.confirmPassword != null && req.body.confirmPassword !== password) return res.status(400).json({ error: "The two passwords don't match. Please type them again." });
   try {
     const { data, error } = await supabase.auth.signUp({
       email, password,
-      options: { data: { name, phone } }
+      // the link in the confirmation email comes back to the app (which signs the person in), not to a blank page
+      options: { data: { name, phone }, emailRedirectTo: `${siteUrl()}/auth/callback` }
     });
     if (error) {
       console.log(`SIGNUP ERROR MESSAGE: ${error.message} (status ${error.status})`);
@@ -224,7 +206,8 @@ app.post("/auth/login", L.loginIp, L.loginEmail, async (req, res) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       console.log(`LOGIN ERROR MESSAGE: ${error.message} (status ${error.status})`);
-      return res.status(400).json({ error: friendlyAuthError(error, "I couldn't sign you in. Please check your details and try again.") });
+      const unconfirmed = error.code === "email_not_confirmed" || /email not confirmed/i.test(error.message || "");
+      return res.status(400).json({ error: friendlyAuthError(error, "I couldn't sign you in. Please check your details and try again."), ...(unconfirmed ? { needsConfirmation: true } : {}) });
     }
     res.json({ user: data.user, session: data.session });
   } catch (err) {

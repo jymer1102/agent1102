@@ -34,7 +34,12 @@
   function setAccountEmail(email) {
     document.getElementById("profile-email-current").textContent = email || "\u2014";
   }
-  function clearAccountDisplay() { setDisplayName(""); setAccountEmail(""); }
+  // An email change that is waiting for its confirmation link: shown under the current address
+  function setPendingEmail(email) {
+    document.getElementById("profile-email-pending").hidden = !email;
+    document.getElementById("profile-email-pending-address").textContent = email || "";
+  }
+  function clearAccountDisplay() { setDisplayName(""); setAccountEmail(""); setPendingEmail(""); }
   setDisplayName(localStorage.getItem("agent1102_name"));
 
   // Show the cached picture immediately. (Older versions cached the image itself as base64, so only trust real URLs.)
@@ -50,6 +55,7 @@
       setAvatar(profile?.avatar_url || null);
       if (profile?.name) setDisplayName(profile.name);
       setAccountEmail(profile?.email || "");
+      setPendingEmail(profile?.pendingEmail || "");
     } catch { /* network error: keep whatever is cached */ }
   }
 
