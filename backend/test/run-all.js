@@ -4,7 +4,7 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 
-const suites = ["unit", "hardening", "integration", "client", "app", "settings"];
+const suites = ["unit", "hardening", "integration", "client", "app", "settings", "emailflows"];
 const failed = [];
 for (const name of suites) {
   console.log(`\n===== ${name} tests =====`);

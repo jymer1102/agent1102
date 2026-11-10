@@ -46,6 +46,14 @@
 
   const isOpen = () => settingsModal.classList.contains("open");
 
+  // empties the password boxes and goes back to step 1 (no code asked for yet)
+  function resetPasswordForm() {
+    for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
+    $("password-code-box").hidden = true;
+    $("password-code-note").textContent = "";
+    hidePasswords();
+  }
+
   // ---------- open / close / pages ----------
   let returnFocus = null;
 
@@ -67,8 +75,7 @@
     returnFocus = document.activeElement;
     $("profile-name").value = localStorage.getItem("agent1102_name") || "";
     $("profile-email").value = "";
-    $("profile-password").value = "";
-    hidePasswords();
+    resetPasswordForm();
     say($("profile-msg"), "");
     selectPage(page || "profile", false);
     settingsModal.classList.add("open");
@@ -79,7 +86,7 @@
   function closeSettings() {
     if (!isOpen()) return;
     settingsModal.classList.remove("open");
-    $("profile-password").value = ""; $("groq-key").value = ""; // nothing secret is left sitting in a hidden box
+    resetPasswordForm(); $("groq-key").value = ""; // nothing secret is left sitting in a hidden box
     hidePasswords();
     // Put focus back where it came from. The Settings button lives in the sidebar, which closed when this window opened, so it usually
     // can't take focus any more: then use the button that opens the sidebar. (Check that the focus really landed: a hidden element
@@ -136,17 +143,57 @@
     saveProfileField($("save-name"), { name }, "Username saved.", () => setDisplayName(name));
   });
 
-  $("save-email").addEventListener("click", () => {
+  // Change email: Supabase emails a confirmation link to the NEW address. The address only changes once that link is opened.
+  $("save-email").addEventListener("click", () => busy($("save-email"), async () => {
     const email = $("profile-email").value.trim();
     if (!email) return say(profileMsg, "Type your new email address first.", "err");
-    saveProfileField($("save-email"), { email }, "Email changed. Use the new address the next time you sign in.", () => { setAccountEmail(email); $("profile-email").value = ""; });
-  });
+    say(profileMsg, "");
+    try {
+      const r = await api("POST", "/auth/email/change", { email });
+      $("profile-email").value = "";
+      if (r.changed) { setAccountEmail(r.email); setPendingEmail(""); return say(profileMsg, "Email changed.", "ok"); }
+      setPendingEmail(r.pendingEmail || email);
+      say(profileMsg, `Check your inbox: I sent a confirmation link to ${r.pendingEmail || email}. Your email stays the same until you open it.`, "ok");
+    } catch (e) { say(profileMsg, e.message, "err"); }
+  }));
 
-  $("save-password").addEventListener("click", () => {
-    const password = $("profile-password").value;
-    if (!password) return say(profileMsg, "Type your new password first.", "err");
-    saveProfileField($("save-password"), { password }, "Password changed. Your other devices were signed out.", () => { $("profile-password").value = ""; hidePasswords(); });
-  });
+  // Change password, in two steps. 1) Supabase emails a 6-digit code to the current address. 2) The code and the new password go together.
+  const codeBox = $("password-code-box"), codeNote = $("password-code-note");
+  const newPassword = () => $("profile-password").value.trim(), newPasswordAgain = () => $("profile-password-confirm").value.trim();
+
+  function checkNewPassword() {
+    if (!newPassword()) { say(profileMsg, "Type your new password first.", "err"); return false; }
+    if (newPassword() !== newPasswordAgain()) { say(profileMsg, newPasswordAgain() ? "The two passwords don't match. Please type them again." : "Type your new password a second time to confirm it.", "err"); return false; }
+    return true;
+  }
+
+  async function sendPasswordCode(button) {
+    if (!checkNewPassword()) return;
+    await busy(button, async () => {
+      say(profileMsg, "");
+      try {
+        const r = await api("POST", "/auth/password/code");
+        codeBox.hidden = false;
+        say(codeNote, `I emailed a code to ${r.sentTo}. Enter it below to finish changing your password. It can take a minute, and it may land in spam.`);
+        $("password-code").focus();
+      } catch (e) { say(profileMsg, e.message, "err"); }
+    });
+  }
+  $("send-password-code").addEventListener("click", () => sendPasswordCode($("send-password-code")));
+  $("resend-password-code").addEventListener("click", () => sendPasswordCode($("resend-password-code")));
+
+  $("save-password").addEventListener("click", () => busy($("save-password"), async () => {
+    if (!checkNewPassword()) return;
+    const code = $("password-code").value.trim();
+    if (!code) return say(profileMsg, "Type the code from the email first.", "err");
+    say(profileMsg, "");
+    try {
+      await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code });
+      for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
+      codeBox.hidden = true; say(codeNote, ""); hidePasswords();
+      say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
+    } catch (e) { say(profileMsg, e.message, "err"); }
+  }));
 
   // ---------- Danger Zone ----------
   profileDelete.addEventListener("click", async () => {

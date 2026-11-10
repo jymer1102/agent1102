@@ -74,16 +74,41 @@ const scoreRows = { trex_highscores: {}, pacman_highscores: {} }; // one row per
 let deletedUser = false, userDeletes = 0;
 const settingsRows = {}; let settingsTableMissing = false; // the user_settings table (supabase/settings.sql)
 const profileWrites = [];
+// Supabase Auth's email features, as the real service answers them. `authCalls` records what reached it and with WHOSE token.
+const authCalls = [];
+let profileRow = null; // the saved profiles row (null = none yet)
+let unconfirmedLogin = false, recoverMode = "ok", reauthCode = "123456", passwordNeedsCode = true, emailChangeAppliesAtOnce = false;
 const sbServer = http.createServer((req, res) => {
   let raw = ""; req.on("data", d => raw += d); req.on("end", () => {
     const url = new URL(req.url, "http://x");
     const json = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
     const bearer = (req.headers.authorization || "").split(" ")[1];
-    if (url.pathname === "/auth/v1/token") return json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
+    if (url.pathname === "/auth/v1/token") return unconfirmedLogin ? json(400, { code: 400, error_code: "email_not_confirmed", msg: "Email not confirmed" }) : json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
+    if (url.pathname === "/auth/v1/signup") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "signup", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { id: "22222222-2222-4222-8222-222222222222", aud: "authenticated", email: b.email, user_metadata: b.data || {}, identities: [{}] }); }
+    if (url.pathname === "/auth/v1/recover") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "recover", redirect: url.searchParams.get("redirect_to"), body: b }); return recoverMode === "ratelimit" ? json(429, { code: 429, error_code: "over_email_send_rate_limit", msg: "email rate limit exceeded" }) : recoverMode === "error" ? json(500, { msg: "boom" }) : json(200, {}); }
+    if (url.pathname === "/auth/v1/resend") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "resend", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { message_id: "m" }); }
+    if (url.pathname === "/auth/v1/reauthenticate") { authCalls.push({ what: "reauthenticate", bearer }); return bearer === TOKEN ? json(200, {}) : json(401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" }); }
+    if (url.pathname === "/auth/v1/user" && req.method === "PUT") { // the person changing their OWN email or password with their OWN token
+      const b = JSON.parse(raw || "{}"); authCalls.push({ what: "update-user", bearer, body: b, redirect: url.searchParams.get("redirect_to") });
+      if (bearer !== TOKEN) return json(401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" });
+      if (b.email) {
+        if (b.email === "taken@x.co") return json(422, { code: 422, error_code: "email_exists", msg: "A user with this email address has already been registered" });
+        if (emailChangeAppliesAtOnce) { USER.email = b.email; return json(200, USER); }
+        USER.new_email = b.email; return json(200, { ...USER, new_email: b.email });
+      }
+      if (b.password) {
+        if (b.password === "short") return json(422, { code: 422, error_code: "weak_password", msg: "Password should be at least 6 characters." });
+        if (b.password === "samepassword") return json(422, { code: 422, error_code: "same_password", msg: "New password should be different from the old password." });
+        if (passwordNeedsCode && !b.nonce) return json(400, { code: 400, error_code: "reauthentication_needed", msg: "Password update requires reauthentication" });
+        if (passwordNeedsCode && b.nonce !== reauthCode) return json(400, { code: 400, error_code: "reauthentication_not_valid", msg: "Invalid reauthentication nonce" });
+        return json(200, USER);
+      }
+      return json(200, USER);
+    }
     if (url.pathname === "/auth/v1/user") return bearer === TOKEN && !deletedUser ? json(200, USER) : json(401, { message: "bad jwt" });
-    if (url.pathname === "/auth/v1/logout") { res.writeHead(204); return res.end(); }
+    if (url.pathname === "/auth/v1/logout") { authCalls.push({ what: "logout", scope: url.searchParams.get("scope"), bearer }); res.writeHead(204); return res.end(); }
     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "DELETE") { userDeletes++; deletedUser = true; return json(200, {}); }
-    if (url.pathname === "/rest/v1/profiles") { if (req.method === "GET") return json(200, []); if (raw) profileWrites.push({ method: req.method, body: JSON.parse(raw) }); res.writeHead(201); return res.end(); }
+    if (url.pathname === "/rest/v1/profiles") { if (req.method === "GET") return json(200, profileRow ? [profileRow] : []); if (raw) profileWrites.push({ method: req.method, body: JSON.parse(raw) }); res.writeHead(201); return res.end(); }
     if (url.pathname === "/rest/v1/user_settings") {
       if (settingsTableMissing) return json(404, { code: "PGRST205", message: "Could not find the table 'public.user_settings' in the schema cache" });
       const uid = (url.searchParams.get("user_id") || "").replace("eq.", "");
@@ -163,7 +188,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
   await listen(groqServer, GROQ_PORT); await listen(sbServer, SB_PORT); await listen(commonsServer, COMMONS_PORT);
   const server = spawn("node", ["server.js"], {
     cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, SETTINGS_CACHE_MS: "250", KEY_ENCRYPTION_SECRET: TEST_SECRET, RATE_LIMIT_SCALE: "1000", PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", COMMONS_API_URL: `http://127.0.0.1:${COMMONS_PORT}/w/api.php`, MEMORY_EXTRACT_GAP_MS: "400" },
+    env: { ...process.env, AUTH_CACHE_MS: "250", SETTINGS_CACHE_MS: "250", KEY_ENCRYPTION_SECRET: TEST_SECRET, RATE_LIMIT_SCALE: "1000", PORT: APP_PORT, SUPABASE_URL: `http://127.0.0.1:${SB_PORT}`, SUPABASE_ANON_KEY: "anon", SUPABASE_SERVICE_KEY: "service", GROQ_API_KEY: "k", GROQ_API_URL: `http://127.0.0.1:${GROQ_PORT}/v1/chat/completions`, SITE_URL: `http://127.0.0.1:${APP_PORT}`, TAVILY_API_KEY: "", BRAVE_API_KEY: "", COMMONS_API_URL: `http://127.0.0.1:${COMMONS_PORT}/w/api.php`, MEMORY_EXTRACT_GAP_MS: "400" },
   });
   let serverLog = ""; server.stdout.on("data", d => serverLog += d); server.stderr.on("data", d => serverLog += d);
   for (let i = 0; i < 50; i++) { try { if ((await call("GET", "/ping")).ok) break; } catch (_) {} await sleep(100); }
@@ -468,6 +493,13 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
       assert(/Too many sign-in attempts for that account\. Please try again in \d+ minutes?\./.test((await locked.json()).error));
       assert(Number(locked.headers.get("retry-after")) > 0);
       assert.strictEqual((await login("someone-else@example.com")).status, 400, "a different account is not locked");
+      // the emails Supabase sends for someone who isn't signed in are limited too, per address, so the site can't be used to flood an inbox
+      const post = (route, email) => fetch(`http://127.0.0.1:${PORT2}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      for (let i = 0; i < 4; i++) assert.strictEqual((await post("/auth/forgot", "target@example.com")).status, 200, "reset email " + (i + 1));
+      const flooded = await post("/auth/forgot", "TARGET@example.com"); // case can't be used to dodge it
+      assert.strictEqual(flooded.status, 429); assert(/Too many emails to that address/.test((await flooded.json()).error));
+      assert.strictEqual((await post("/auth/resend", "target@example.com")).status, 429, "the confirmation email shares that limit");
+      assert.strictEqual((await post("/auth/forgot", "someone-else@example.com")).status, 200, "a different address is not blocked");
     } finally { strict.kill(); }
   });
 
@@ -666,6 +698,142 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     const c = await chat("still works?", { token: TOKEN }); assert.strictEqual(c.status, 200);
     assert.strictEqual(lastAuth(), "Bearer k", "the shared key keeps working");
     settingsTableMissing = false;
+  });
+
+  console.log("\nEmail flows: confirm sign-up, forgot password, change email, change password");
+  const SITE = `http://127.0.0.1:${APP_PORT}`;
+  const lastCall = what => authCalls.filter(c => c.what === what).pop();
+  const callsSince = (what, n) => authCalls.filter(c => c.what === what).length - n;
+  await t("sign-up: the confirmation email's link comes back to the app, and the two passwords must match", async () => {
+    const r = await send("POST", "/auth/signup", { body: { email: "new@x.co", password: "longenough1", confirmPassword: "longenough1", name: "Nia" } });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json(); assert.strictEqual(j.needsConfirmation, true); assert.strictEqual(j.session, null);
+    assert.strictEqual(lastCall("signup").redirect, `${SITE}/auth/callback`, "the link in the email returns to /auth/callback on this site");
+    const before = authCalls.filter(c => c.what === "signup").length;
+    const bad = await send("POST", "/auth/signup", { body: { email: "new2@x.co", password: "longenough1", confirmPassword: "different", name: "Nia" } });
+    assert.strictEqual(bad.status, 400); assert(/don't match/.test((await bad.json()).error));
+    assert.strictEqual(callsSince("signup", before), 0, "a mismatch never reaches Supabase");
+  });
+  await t("signing in with an email that was never confirmed says so and flags it, so the page can offer to resend", async () => {
+    unconfirmedLogin = true;
+    const r = await send("POST", "/auth/login", { body: { email: "new@x.co", password: "longenough1" } });
+    unconfirmedLogin = false;
+    const j = await r.json();
+    assert.strictEqual(r.status, 400); assert.strictEqual(j.needsConfirmation, true); assert(/confirm your email/i.test(j.error), j.error);
+    const wrong = await (await send("POST", "/auth/login", { body: { email: "new@x.co", password: "nope" } })).json();
+    assert.strictEqual(wrong.needsConfirmation, undefined, "an ordinary wrong password is not flagged");
+  });
+  await t("forgot password: Supabase emails the link (back to the app), and the reply is identical whatever happens, so it can't reveal who has an account", async () => {
+    const ok = await send("POST", "/auth/forgot", { body: { email: "someone@x.co" } });
+    const okJ = await ok.json();
+    assert.strictEqual(ok.status, 200); assert.strictEqual(lastCall("recover").body.email, "someone@x.co"); assert.strictEqual(lastCall("recover").redirect, `${SITE}/auth/callback`);
+    recoverMode = "error"; // Supabase itself failing (or no such account) must look exactly the same from outside
+    const hidden = await send("POST", "/auth/forgot", { body: { email: "nobody@x.co" } });
+    recoverMode = "ok";
+    assert.deepStrictEqual([hidden.status, await hidden.json()], [200, okJ]);
+    for (const email of ["", "not an email", ["a@b.c"], null, "a@b.c".repeat(100)]) assert.strictEqual((await send("POST", "/auth/forgot", { body: { email } })).status, 400, JSON.stringify(email).slice(0, 30));
+    recoverMode = "ratelimit";
+    const limited = await send("POST", "/auth/forgot", { body: { email: "someone@x.co" } });
+    recoverMode = "ok";
+    assert.strictEqual(limited.status, 429); assert(/wait/i.test((await limited.json()).error));
+  });
+  await t("resend the confirmation email: asks Supabase for a sign-up email, same reply either way, bad input refused", async () => {
+    const r = await send("POST", "/auth/resend", { body: { email: "new@x.co" } });
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual([lastCall("resend").body.type, lastCall("resend").body.email, lastCall("resend").redirect], ["signup", "new@x.co", `${SITE}/auth/callback`]);
+    assert.strictEqual((await send("POST", "/auth/resend", { body: { email: "nope" } })).status, 400);
+  });
+
+  await t("change email: needs sign-in; Supabase emails a confirmation link; the app uses the PERSON'S token (never the admin API) and says it's pending", async () => {
+    assert.strictEqual((await send("POST", "/auth/email/change", { body: { email: "fresh@x.co" } })).status, 401);
+    for (const email of ["", "bad", ["x@y.z"], USER.email, USER.email.toUpperCase()]) assert.strictEqual((await send("POST", "/auth/email/change", { token: TOKEN, body: { email } })).status, 400, JSON.stringify(email));
+    const adminBefore = adminUpdates.length;
+    const r = await send("POST", "/auth/email/change", { token: TOKEN, body: { email: "fresh@x.co" } });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json(); assert.deepStrictEqual([j.pendingEmail, j.currentEmail, j.changed], ["fresh@x.co", "a@b.c", undefined]);
+    const call = lastCall("update-user");
+    assert.strictEqual(call.bearer, TOKEN, "done as the person, so Supabase applies its own confirmation rules");
+    assert.deepStrictEqual(call.body, { email: "fresh@x.co" });
+    assert.strictEqual(call.redirect, `${SITE}/auth/callback`);
+    assert.strictEqual(adminUpdates.length, adminBefore, "the admin API (instant, unconfirmed) was not used");
+    assert.strictEqual(USER.email, "a@b.c", "the address has NOT changed yet");
+    const prof = await (await send("GET", "/profile", { token: TOKEN })).json();
+    assert.deepStrictEqual([prof.profile.email, prof.profile.pendingEmail], ["a@b.c", "fresh@x.co"], "the page can show 'waiting for confirmation'");
+  });
+  await t("change email: an address already in use gets a plain answer; and if Supabase applies it at once, the page is told", async () => {
+    try {
+      const taken = await send("POST", "/auth/email/change", { token: TOKEN, body: { email: "taken@x.co" } });
+      assert.strictEqual(taken.status, 400); assert(/already exists/.test((await taken.json()).error));
+      emailChangeAppliesAtOnce = true; USER.new_email = undefined; profileWrites.length = 0;
+      const now = await (await send("POST", "/auth/email/change", { token: TOKEN, body: { email: "instant@x.co" } })).json();
+      assert.deepStrictEqual([now.changed, now.email], [true, "instant@x.co"]);
+      await sleep(150); // the saved profile is updated in the background
+      assert(profileWrites.some(w => w.body.email === "instant@x.co"), "the saved profile follows");
+    } finally { emailChangeAppliesAtOnce = false; USER.email = "a@b.c"; USER.new_email = undefined; }
+  });
+  await t("a confirmed email change shows up in /profile, and the saved profile catches up", async () => {
+    try {
+      profileRow = { name: "Sam", email: "a@b.c", phone: null, avatar_url: null }; // what is saved: the OLD address
+      USER.email = "confirmed@x.co"; USER.new_email = undefined; // Supabase changed it when the link was opened
+      await sleep(350); // (the server remembers who is signed in for 250 ms in this test)
+      profileWrites.length = 0;
+      const prof = await (await send("GET", "/profile", { token: TOKEN })).json();
+      assert.deepStrictEqual([prof.profile.email, prof.profile.pendingEmail], ["confirmed@x.co", null]);
+      await sleep(150);
+      assert(profileWrites.some(w => w.body.email === "confirmed@x.co"), "the saved copy was brought up to date");
+    } finally { USER.email = "a@b.c"; profileRow = null; await sleep(350); } // let the server forget the changed address
+  });
+
+  await t("password step 1: needs sign-in, then Supabase emails a code to the current address (shown masked)", async () => {
+    assert.strictEqual((await send("POST", "/auth/password/code")).status, 401);
+    const before = authCalls.filter(c => c.what === "reauthenticate").length;
+    const r = await send("POST", "/auth/password/code", { token: TOKEN });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json(); assert.strictEqual(j.sentTo, "a*@b.c"); assert(!JSON.stringify(j).includes("a@b.c"), "never echoes the full address");
+    assert.strictEqual(callsSince("reauthenticate", before), 1); assert.strictEqual(lastCall("reauthenticate").bearer, TOKEN);
+  });
+  await t("password step 2: the code and both passwords are checked; the new password is set with the PERSON'S token, never the admin API", async () => {
+    const send2 = body => send("POST", "/auth/password", { token: TOKEN, body });
+    assert.strictEqual((await send("POST", "/auth/password", { body: { password: "newpassword1", code: reauthCode } })).status, 401);
+    for (const body of [{}, { password: "" }, { password: ["x"] }, { password: "p".repeat(200) }, { password: "newpassword1", confirmPassword: "other" }, { password: "newpassword1", code: ["1"] }, { password: "newpassword1", code: "1".repeat(50) }]) {
+      assert.strictEqual((await send2(body)).status, 400, JSON.stringify(body).slice(0, 50));
+    }
+    const noCode = await send2({ password: "newpassword1", confirmPassword: "newpassword1" });
+    const noCodeJ = await noCode.json(); assert.strictEqual(noCode.status, 400); assert.strictEqual(noCodeJ.needsCode, true); assert(/confirmation code/i.test(noCodeJ.error), noCodeJ.error);
+    const wrong = await send2({ password: "newpassword1", code: "000000" });
+    assert.strictEqual(wrong.status, 400); assert(/isn't right|expired/.test((await wrong.json()).error));
+    assert.strictEqual((await send2({ password: "short", code: reauthCode })).status, 400, "a too-short password is a 400 with Supabase's reason");
+    const weak = await (await send2({ password: "short", code: reauthCode })).json(); assert(/at least 6 characters/.test(weak.error), weak.error);
+    const same = await (await send2({ password: "samepassword", code: reauthCode })).json(); assert(/different from your current/.test(same.error), same.error);
+    const adminBefore = adminUpdates.length, outBefore = authCalls.filter(c => c.what === "logout").length;
+    const ok = await send2({ password: "newpassword1", confirmPassword: "newpassword1", code: " 123 456 " });
+    assert.strictEqual(ok.status, 200); assert.deepStrictEqual(await ok.json(), { ok: true });
+    const call = lastCall("update-user");
+    assert.deepStrictEqual([call.bearer, call.body], [TOKEN, { password: "newpassword1", nonce: "123456" }], "spaces in the code are ignored, and it is the person's own token");
+    assert.strictEqual(adminUpdates.length, adminBefore, "the admin API (instant, unconfirmed) was not used");
+    await sleep(150);
+    const out = authCalls.filter(c => c.what === "logout").slice(outBefore).pop();
+    assert(out && out.scope === "others", "every OTHER signed-in device is signed out");
+  });
+  await t("after opening a reset-password link there is no code to enter: the same route sets the password", async () => {
+    passwordNeedsCode = false;
+    const r = await send("POST", "/auth/password", { token: TOKEN, body: { password: "brandnew123", confirmPassword: "brandnew123" } });
+    passwordNeedsCode = true;
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(lastCall("update-user").body, { password: "brandnew123" }, "no nonce is sent when none was given");
+  });
+  await t("/auth/update no longer changes email or password (those need the confirmation emails), and says where to go", async () => {
+    const adminBefore = adminUpdates.length;
+    for (const body of [{ email: "a@b.co" }, { password: "newpassword1" }, { name: "Sam", email: "a@b.co" }]) {
+      const r = await send("POST", "/auth/update", { token: TOKEN, body });
+      assert.strictEqual(r.status, 400); assert(/confirmation emails/.test((await r.json()).error));
+    }
+    assert.strictEqual(adminUpdates.length, adminBefore, "nothing was changed");
+    assert.strictEqual((await send("POST", "/auth/update", { token: TOKEN, body: { name: "   " } })).status, 400, "an empty name is refused");
+  });
+  await t("a failing or unreachable Supabase is reported as 'try again', not as a crash or a wrong password", async () => {
+    const r = await send("POST", "/auth/password", { token: "not-the-token", body: { password: "newpassword1", code: "123456" } });
+    assert.strictEqual(r.status, 401); // (the sign-in check refuses it before Supabase is asked)
   });
 
   await t("deleting an account removes it in one step, and its sign-in stops working at once", async () => {

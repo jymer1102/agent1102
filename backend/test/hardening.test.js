@@ -293,6 +293,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       assert(/transform\s*:\s*none/.test(rule("#sidebar.open")) && /visibility\s*:\s*visible/.test(rule("#sidebar.open")));
       assert(!/display\s*:\s*none/.test(rule("#overlay")) && !/display\s*:\s*block/.test(rule("#overlay.show")), "toggling display can't fade");
     });
+    await t("sign-in messages keep their colours: the rule for .auth-error is at least as specific as `.auth-box p` (which once made errors grey)", () => {
+      const colourRule = sel => { const r = rules.filter(x => x.sels.includes(sel) && /(^|[;\s])color\s*:/.test(x.body)); return r.length ? r[r.length - 1].body.match(/(?:^|[;\s])color\s*:([^;]*)/)[1].trim() : ""; };
+      assert(/#ff6b6d/i.test(colourRule(".auth-box .auth-error")), "errors are red inside the sign-in box");
+      assert(/#2ecc71/i.test(colourRule(".auth-box .auth-error.info")), "good news is green");
+      assert(/#c0282a/i.test(colourRule(".light .auth-box .auth-error")) && /#1e8449/i.test(colourRule(".light .auth-box .auth-error.info")), "and both have light-theme versions");
+      assert(!rules.some(x => x.sels.includes(".auth-error") && /color\s*:/.test(x.body)), "no bare .auth-error colour rule is left (it would lose to .auth-box p)");
+    });
     await t("people who ask their phone to reduce motion get no animation", () => {
       assert(/prefers-reduced-motion\s*:\s*reduce\)\s*\{[^{}]*#sidebar[^{}]*\{[^}]*transition-duration/.test(css));
     });

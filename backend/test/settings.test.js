@@ -143,21 +143,26 @@ const openSettings = async (app, page) => {
     assert.strictEqual(app.w.localStorage.getItem("agent1102_name"), "Samantha");
     assert(/saved/i.test(txt(app.$("#profile-msg"))) && app.$("#profile-msg").classList.contains("ok"));
   }));
-  await t("changing the email and password each send only that one field, and clear the box", () => withApp({ routes: { "/auth/update": () => ok({ success: true }) } }, async app => {
+  await t("email and password changes never use the old instant route: they go through the confirmation emails", () => withApp({ routes: {
+    "/auth/update": () => ok({ success: true }),
+    "/auth/email/change": b => ok({ pendingEmail: b.email, currentEmail: "a@b.c" }),
+    "/auth/password/code": () => ok({ ok: true, sentTo: "a*@b.c" }),
+    "/auth/password": () => ok({ ok: true }),
+  } }, async app => {
     await openSettings(app);
     app.$("#profile-email").value = "new@x.co"; app.$("#save-email").click(); await app.sleep(40);
-    app.$("#profile-password").value = "hunter22!"; app.$("#save-password").click(); await app.sleep(40);
-    const sent = callsTo(app, "/auth/update").map(c => c.body);
-    assert.deepStrictEqual(sent, [{ email: "new@x.co" }, { password: "hunter22!" }]);
-    assert.strictEqual(txt(app.$("#profile-email-current")), "new@x.co");
-    assert.strictEqual(app.$("#profile-password").value, "");
-    assert.strictEqual(app.$("#profile-email").value, "");
+    app.$("#profile-password").value = "hunter22!"; app.$("#profile-password-confirm").value = "hunter22!"; app.$("#send-password-code").click(); await app.sleep(40);
+    app.$("#password-code").value = "123456"; app.$("#save-password").click(); await app.sleep(40);
+    assert.deepStrictEqual(callsTo(app, "/auth/email/change").map(c => c.body), [{ email: "new@x.co" }]);
+    assert.strictEqual(callsTo(app, "/auth/password/code").length, 1);
+    assert.deepStrictEqual(callsTo(app, "/auth/password").map(c => c.body), [{ password: "hunter22!", confirmPassword: "hunter22!", code: "123456" }]);
+    assert.strictEqual(callsTo(app, "/auth/update").length, 0, "/auth/update is only for the name now");
   }));
-  await t("empty boxes and server errors show a message in red; nothing is sent for empty ones", () => withApp({ routes: { "/auth/update": () => bad(400, "That email address doesn't look right.") } }, async app => {
+  await t("empty boxes and server errors show a message in red; nothing is sent for empty ones", () => withApp({ routes: { "/auth/email/change": () => bad(400, "That email address doesn't look right.") } }, async app => {
     await openSettings(app);
     app.$("#profile-name").value = ""; app.$("#save-name").click();
-    app.$("#save-email").click(); app.$("#save-password").click(); await app.sleep(20);
-    assert.strictEqual(callsTo(app, "/auth/update").length, 0);
+    app.$("#save-email").click(); app.$("#send-password-code").click(); app.$("#save-password").click(); await app.sleep(20);
+    for (const p of ["/auth/update", "/auth/email/change", "/auth/password/code", "/auth/password"]) assert.strictEqual(callsTo(app, p).length, 0, p);
     assert(app.$("#profile-msg").classList.contains("err"));
     app.$("#profile-email").value = "nope"; app.$("#save-email").click(); await app.sleep(40);
     assert.strictEqual(txt(app.$("#profile-msg")), "That email address doesn't look right.");

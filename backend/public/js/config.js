@@ -13,6 +13,13 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   const authStay = document.getElementById("auth-stay"); // "Stay signed in" checkbox
   const authError = document.getElementById("auth-error");
   const authSubtitle = document.getElementById("auth-subtitle");
+  const authPasswordWrap = document.getElementById("auth-password-wrap");
+  const authConfirmWrap = document.getElementById("auth-confirm-wrap");
+  const authConfirm = document.getElementById("auth-confirm");
+  const authStayLabel = document.getElementById("auth-stay-label");
+  const authSocial = document.getElementById("auth-social");
+  const authForgot = document.getElementById("auth-forgot");
+  const authResend = document.getElementById("auth-resend");
   const chatEl = document.getElementById("chat");
   const input = document.getElementById("input");
   const btn = document.getElementById("send");
@@ -50,7 +57,6 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   let currentChatTitle = null; // AI-generated summary title for the sidebar; null = not generated yet
   let currentChatTitleLocked = false; // true once the person renamed this chat: the automatic titler must leave the name alone
   let userToken = localStorage.getItem("agent1102_token") || null;
-  let isSignUp = false;
 
   // Keeps the Render backend awake by hitting the dedicated /ping route
   function pingRenderServer() {

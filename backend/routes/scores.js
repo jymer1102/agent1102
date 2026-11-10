@@ -60,9 +60,17 @@ app.get("/profile", needUser, async (req, res) => {
   ]);
 
   if (profileRes.error) return fail(res, 500, MSG.generic, profileRes.error);
+  // The sign-in account is the source of truth for the email: it changes when the confirmation link in the email is opened,
+  // so the saved copy in profiles can be behind. Report the real one, and any change still waiting for its link.
+  const liveEmail = req.user.email || "";
+  if (liveEmail && profileRes.data && profileRes.data.email !== liveEmail) {
+    supabaseAdmin.from("profiles").update({ email: liveEmail, updated_at: new Date().toISOString() }).eq("id", userId).then(() => {}, () => {});
+  }
   res.json({
     profile: {
       ...(profileRes.data || {}),
+      ...(liveEmail ? { email: liveEmail } : {}),
+      pendingEmail: req.user.new_email || null,
       trex_high_score: trexRes.data?.high_score ?? 0,
       pacman_high_score: pacmanRes.data?.high_score ?? 0,
     }

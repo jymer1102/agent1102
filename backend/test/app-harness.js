@@ -15,7 +15,7 @@ const b64 = o => Buffer.from(JSON.stringify(o)).toString("base64url");
 // a token that looks like a real, unexpired sign-in (the page reads its expiry)
 const fakeToken = () => `${b64({ alg: "HS256" })}.${b64({ sub: "11111111-1111-4111-8111-111111111111", exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
 
-async function bootApp({ routes = {}, storage = {}, light = false } = {}) {
+async function bootApp({ routes = {}, storage = {}, session = {}, light = false, signedOut = false, url = "http://localhost/" } = {}) {
   let html = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const scripts = [...html.matchAll(/<script src="(js\/[^"?]+)(?:\?[^"]*)?"><\/script>/g)].map(m => m[1]);
   html = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<link[^>]*>/g, "");
@@ -24,7 +24,7 @@ async function bootApp({ routes = {}, storage = {}, light = false } = {}) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", e => errors.push(e));
-  const dom = new JSDOM(html, { url: "http://localhost/", pretendToBeVisual: true, runScripts: "outside-only", virtualConsole });
+  const dom = new JSDOM(html, { url, pretendToBeVisual: true, runScripts: "outside-only", virtualConsole });
   const w = dom.window;
   const calls = [];
   w.__calls = calls;
@@ -63,7 +63,8 @@ async function bootApp({ routes = {}, storage = {}, light = false } = {}) {
   };
 
   // ---- storage the page expects ----
-  Object.entries({ agent1102_token: fakeToken(), ...storage }).forEach(([k, v]) => w.localStorage.setItem(k, v));
+  Object.entries({ ...(signedOut ? {} : { agent1102_token: fakeToken() }), ...storage }).forEach(([k, v]) => w.localStorage.setItem(k, v)); // signedOut: starts on the sign-in screen
+  Object.entries(session).forEach(([k, v]) => w.sessionStorage.setItem(k, v)); // this tab's own storage (e.g. a reset-password link's login)
   if (light) w.localStorage.setItem("agent1102_theme", "light");
 
   const ctx = dom.getInternalVMContext();

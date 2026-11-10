@@ -44,7 +44,7 @@
 
   <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
   <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
-  <link rel="stylesheet" href="style.css?v=20261107a" />
+  <link rel="stylesheet" href="style.css?v=20261109a" />
 </head>
 
 <body>
@@ -60,21 +60,29 @@
       <input type="text" id="auth-name" name="name" autocomplete="name" placeholder="Your name" style="display:none" />
       <input type="tel" id="auth-phone" name="phone" autocomplete="tel" placeholder="Phone number (optional)" style="display:none" />
       <input type="text" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" id="auth-email" name="email" placeholder="Email" />
-      <div class="pw-wrap">
+      <div class="pw-wrap" id="auth-password-wrap">
         <input type="password" id="auth-password" name="password" autocomplete="current-password" placeholder="Password" />
         <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
       </div>
-      <label class="auth-stay"><input type="checkbox" id="auth-stay" checked /> <span>Stay signed in</span></label>
+      <div class="pw-wrap" id="auth-confirm-wrap" style="display:none">
+        <input type="password" id="auth-confirm" name="confirm-password" autocomplete="new-password" placeholder="Confirm password" />
+        <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+      </div>
+      <label class="auth-stay" id="auth-stay-label"><input type="checkbox" id="auth-stay" checked /> <span>Stay signed in</span></label>
       <p class="auth-error" id="auth-error"></p>
       <button type="submit" class="primary" id="auth-submit">Sign In</button>
+      <button type="button" class="auth-toggle" id="auth-forgot">Forgot password?</button>
+      <button type="button" class="auth-toggle" id="auth-resend" hidden>Resend confirmation email</button>
     </form>
-    <div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0">
-      <div style="flex:1;height:1px;background:var(--border)"></div>
-      <span style="color:var(--text-muted);font-size:0.8rem">or</span>
-      <div style="flex:1;height:1px;background:var(--border)"></div>
+    <div id="auth-social">
+      <div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <span style="color:var(--text-muted);font-size:0.8rem">or</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      <button class="primary" id="discord-btn" style="background:#5865F2"><i class="fa-brands fa-discord"></i> Continue with Discord</button>
+      <button class="primary" id="github-btn" style="background:#333"><i class="fa-brands fa-github"></i> Continue with GitHub</button>
     </div>
-    <button class="primary" id="discord-btn" style="background:#5865F2"><i class="fa-brands fa-discord"></i> Continue with Discord</button>
-    <button class="primary" id="github-btn" style="background:#333"><i class="fa-brands fa-github"></i> Continue with GitHub</button>
     <button class="auth-toggle" id="auth-toggle">Don't have an account? Sign up</button>
   </div>
 </div>
@@ -164,20 +172,31 @@
         <div class="field">
           <label for="profile-email">Email</label>
           <p class="field-note">Account email: <strong id="profile-email-current">&mdash;</strong></p>
+          <p class="field-note pending" id="profile-email-pending" hidden>Waiting for you to confirm <strong id="profile-email-pending-address"></strong>. Open the link in the email I sent there to finish. Your email stays the same until you do.</p>
           <div class="field-row">
             <input type="text" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" id="profile-email" class="modal-input" placeholder="New email address" />
-            <button type="button" id="save-email" class="modal-btn primary">Change email</button>
+            <button type="button" id="save-email" class="modal-btn primary">Send confirmation</button>
           </div>
         </div>
 
         <div class="field">
           <label for="profile-password">Password</label>
-          <div class="field-row">
-            <div class="pw-wrap">
-              <input type="password" id="profile-password" class="modal-input" autocomplete="new-password" placeholder="New password" />
-              <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+          <div class="pw-wrap">
+            <input type="password" id="profile-password" class="modal-input" autocomplete="new-password" placeholder="New password" />
+            <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+          </div>
+          <div class="pw-wrap">
+            <input type="password" id="profile-password-confirm" class="modal-input" autocomplete="new-password" placeholder="Confirm new password" aria-label="Confirm new password" />
+            <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+          </div>
+          <button type="button" id="send-password-code" class="modal-btn primary">Send confirmation code</button>
+          <div class="code-box" id="password-code-box" hidden>
+            <p class="field-note" id="password-code-note" role="status" aria-live="polite"></p>
+            <div class="field-row">
+              <input type="text" id="password-code" class="modal-input" inputmode="numeric" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="Confirmation code" aria-label="Confirmation code from your email" />
+              <button type="button" id="save-password" class="modal-btn primary">Change password</button>
             </div>
-            <button type="button" id="save-password" class="modal-btn primary">Change password</button>
+            <button type="button" id="resend-password-code" class="modal-btn subtle">Send a new code</button>
           </div>
         </div>
 
@@ -269,7 +288,7 @@
 </div>
 
 <script src="js/session.js?v=20261021a"></script>
-<script src="js/config.js?v=20261021a"></script>
+<script src="js/config.js?v=20261109a"></script>
 <script src="js/utils.js?v=20261017a"></script>
 <script src="js/render.js?v=20261031b"></script>
 <script src="js/copy.js?v=20261029a"></script>
@@ -278,9 +297,9 @@
 <script src="js/study.js?v=20261020a"></script>
 <script src="js/stream.js?v=20261029a"></script>
 <script src="js/commands.js?v=20261030a"></script>
-<script src="js/auth.js?v=20261021a"></script>
-<script src="js/profile.js?v=20261107a"></script>
-<script src="js/settings.js?v=20261107a"></script>
+<script src="js/auth.js?v=20261109a"></script>
+<script src="js/profile.js?v=20261109a"></script>
+<script src="js/settings.js?v=20261109a"></script>
 <script src="js/ui.js?v=20261021b"></script>
 <script src="js/sendstate.js?v=20261020a"></script>
 <script src="js/chat.js?v=20261030a"></script>
