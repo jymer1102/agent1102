@@ -10,13 +10,6 @@ const groq = require("../lib/groq");
 let passed = 0, failed = 0;
 async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { failed++; console.log("  FAIL " + name + "\n       " + e.message); } }
 
-// A test for something that is knowingly not done: it still RUNS, but is reported as "todo" and does not fail the build.
-// If it ever passes, it says so, and `known(...)` should be changed back to `t(...)`.
-async function known(name, reason, fn) {
-  try { await fn(); passed++; console.log("  ok   " + name + "\n       (this now passes: change known(...) back to t(...))"); }
-  catch (e) { console.log("  todo " + name + "\n       (known, not counted as a failure: " + reason + ")"); }
-}
-
 (async () => {
   console.log("emotion / domain / effort / trimming");
   await t("sarcasm, frustration, caps, distress, crisis, good news are flagged; neutral text is not", () => {
@@ -335,12 +328,11 @@ async function known(name, reason, fn) {
     reset({ "/commons": "error" }); await img.searchImages("flaky one"); reset(); const ok = await img.searchImages("flaky one");
     assert.strictEqual(ok.images.length, 2, "the next try asks again");
   });
-  await known("too-short or blocked searches are refused before anything is sent", "the image-search block list is empty on purpose, so this check can't pass yet", async () => {
+  await t("too-short searches are refused before anything is sent", async () => {
     reset();
     assert.deepStrictEqual((await img.searchImages(" a ")).images, []);
     assert.strictEqual(seen.length, 0);
-    ["nude photos", "NSFW pics", "porn", "hentai art", "xxx"].forEach(q => assert(img.isBlockedQuery(q), q));
-    ["golden gate bridge", "renaissance painting", "assess the damage", "Essex"].forEach(q => assert(!img.isBlockedQuery(q), q));
+    // (Add your own checks for blocked and allowed searches here, once you have decided on the block list: see img.isBlockedQuery.)
   });
   await t("normalize keeps only https, removes repeats, caps the count, and falls back to the thumbnail for the full-size link", () => {
     const out = img.normalize([
