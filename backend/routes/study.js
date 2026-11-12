@@ -18,7 +18,7 @@ const STUDY_MAX_MATERIAL = 40000;
 async function groqStudy(system, user, { json, maxTokens, signal }) {
   // never wait forever on the AI service, and stop as soon as the person has left (signal) so we don't pay for answers nobody reads
   const timeout = AbortSignal.timeout(60000);
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const response = await fetch(groq.url(), { // GROQ_API_URL can point this elsewhere (the tests do), same as the chat route
     method: "POST",
     headers: groq.authHeaders(), // the shared key, or the person's own (lib/groq.js)
     body: JSON.stringify({
@@ -41,8 +41,18 @@ async function groqStudy(system, user, { json, maxTokens, signal }) {
   return String(data.choices[0].message.content || "");
 }
 
-function parseJsonLoose(text) {
-  const t = String(text || "").replace(/^```(?:json)?\s*|\s*```$/gi, "").trim();
+// The AI writes LaTeX inside JSON text, where every backslash must be doubled ("\\\\frac"). It often forgets, and then:
+//  - "\\(" or "\\sqrt" are not valid JSON at all, so the whole quiz would be thrown away, and
+//  - "\\frac", "\\theta", "\\times", "\\neq", "\\beta", "\\right" ARE valid JSON escapes (form feed, tab, new line...),
+//    so the text parses fine and the formula quietly turns into garbage.
+// This doubles every backslash that is not a real JSON escape, and also doubles \b \f \n \r \t when a letter follows
+// them (that is always a LaTeX command here: quiz text is one short line and never holds a real line break).
+function repairLatexEscapes(text) {
+  return String(text).replace(/\\(\\|"|\/|u[0-9a-fA-F]{4}|[bfnrt](?![A-Za-z]))|\\/g, (m, ok) => (ok ? m : "\\\\"));
+}
+function parseJsonLoose(text, opts) {
+  let t = String(text || "").replace(/^```(?:json)?\s*|\s*```$/gi, "").trim();
+  if (opts && opts.latex) t = repairLatexEscapes(t);
   try { return JSON.parse(t); } catch (_) {}
   const a = t.indexOf("{"), b = t.lastIndexOf("}");
   if (a !== -1 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (_) {} }
@@ -50,29 +60,82 @@ function parseJsonLoose(text) {
 }
 const clip = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
 
-// A math picture attached to a quiz question / flashcard: keep it only if it is a plain object of reasonable size
-const VISUAL_TYPES = ["graph", "geometry", "numberline", "fraction"];
+// What the quiz writer is told about formulas and pictures. (String.raw keeps the backslashes exactly as the AI should write them in JSON.)
+const QUIZ_FORMULA_RULES = String.raw`FORMULAS: write every formula, equation, fraction, root, exponent, Greek letter, matrix, inequality and so on as LaTeX, in the question, the options and the explanation: \( ... \) inline, or $$ ... $$ for a standalone equation (never a single $, it means money). Chemical formulas and reactions go inside the same delimiters with \ce{...}, for example \(\ce{H2O}\) or \(\ce{2H2 + O2 -> 2H2O}\). The reply is JSON, so every backslash is doubled exactly as shown here: "question": "What is \(\frac{1}{2} + \frac{1}{4}\)?" and "options": ["\(\frac{3}{4}\)", "\(\frac{2}{6}\)", "\(\sqrt{2}\)", "\(1\)"]. Do not write math as plain text like x^2 or sqrt(x) outside of a "visual".`;
+const QUIZ_PICTURE_RULES = String.raw`PICTURES: add one only when the question truly depends on it (most questions need none), and make sure it agrees with the correct answer. (1) "visual": a mathviz object (format below) drawn above the question, for graphs of functions or inequalities, number lines, geometry figures and fractions, like "Which equation does this graph show?" or "What is the length of the hypotenuse?". (2) "chart": for questions about data, a chart object {"type":"bar","title":"Sales","labels":["Jan","Feb","Mar"],"datasets":[{"label":"Units","data":[12,30,21]}],"xLabel":"Month","yLabel":"Units"} where type is bar, line, pie, doughnut or radar, values are plain numbers, and every dataset has exactly one value per label, like "Which month had the most sales?". (3) Options that are pictures, for "Which graph shows ...?" questions: write EVERY option as {"text":"a short label or an empty string","visual":{mathviz object}}, each with its own different picture, instead of plain strings. (4) "explanationVisual": optional mathviz object shown after the student answers, for example the same graph with the answer marked. Never mention a picture that you did not include, and never use ASCII art.`;
+// A math picture attached to a quiz question / option / flashcard: kept only if it really draws.
+// (validMathVisual recognises the picture type, needs actual content, and tidies number lines; drawError runs the page's own drawer.)
 function cleanVisual(v) {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-  if (!VISUAL_TYPES.includes(String(v.type || "").toLowerCase().replace(/[\s_-]/g, ""))) return null;
-  try { if (JSON.stringify(v).length > 4000) return null; } catch (_) { return null; }
-  return drawError(v) ? null : v;
+  const spec = validMathVisual(v);
+  if (!spec) return null;
+  try { if (JSON.stringify(spec).length > 4000) return null; } catch (_) { return null; }
+  return drawError(spec) ? null : spec;
 }
+// A data chart (bar, line, pie, donut, radar) for a quiz question: the same shape the page's chart blocks use, checked here so
+// the page never has to draw a broken one. null = not usable.
+const CHART_KINDS = { bar: "bar", column: "bar", line: "line", pie: "pie", doughnut: "doughnut", donut: "doughnut", radar: "radar", spider: "radar" };
+function cleanChart(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  if (v.data && !Array.isArray(v.data) && Array.isArray(v.data.labels)) v = { ...v, labels: v.data.labels, datasets: v.data.datasets }; // Chart.js style
+  if (!Array.isArray(v.datasets) && Array.isArray(v.data)) v = { ...v, datasets: [{ label: v.label || v.yLabel || "", data: v.data }] };
+  const type = CHART_KINDS[String(v.type || "").toLowerCase().replace(/[^a-z]/g, "").replace(/(chart|graph)$/, "")];
+  if (!type || !Array.isArray(v.labels) || !Array.isArray(v.datasets)) return null;
+  if (v.labels.length < 2 || v.labels.length > 24) return null;
+  const labels = v.labels.map(l => clip(l, 40));
+  if (labels.some(l => !l)) return null;
+  const circular = type === "pie" || type === "doughnut";
+  const datasets = [];
+  for (const d of v.datasets.slice(0, circular ? 1 : 4)) {
+    const vals = Array.isArray(d) ? d : d && d.data;
+    if (!Array.isArray(vals) || vals.length !== labels.length) return null;
+    const nums = vals.map(n => (typeof n === "number" ? n : Number(String(n).replace(/[,$%\s]/g, ""))));
+    if (nums.some(n => !Number.isFinite(n)) || (circular && nums.some(n => n < 0))) return null;
+    datasets.push({ label: clip(d && !Array.isArray(d) ? d.label : "", 40), data: nums });
+  }
+  if (!datasets.length) return null;
+  if (circular && datasets[0].data.reduce((x, y) => x + y, 0) <= 0) return null;
+  return { type, title: clip(v.title, 80), labels, datasets, xLabel: clip(v.xLabel, 40), yLabel: clip(v.yLabel, 40) };
+}
+// "no picture" can be written many ways (missing, null, "", false, {})
+const given = v => !(v == null || v === "" || v === false || (typeof v === "object" && !Array.isArray(v) && !Object.keys(v).length));
+
+const QUIZ_LIMITS = { question: 600, option: 300, explanation: 800 };
+// A question that asks for a picture the page can't draw would be unanswerable, so such a question is dropped instead of shown without it.
 function cleanQuiz(raw, want) {
   const list = raw && Array.isArray(raw.questions) ? raw.questions : [];
   const questions = [];
   for (const q of list) {
-    const text = clip(q && (q.question || q.q), 400);
-    const opts = Array.isArray(q && q.options) ? q.options.map(o => clip(o, 200).replace(/^[A-Da-d][).:]\s+/, "")).filter(Boolean) : [];
-    if (!text || opts.length < 2 || opts.length > 6) continue;
+    const text = clip(q && (q.question || q.q), QUIZ_LIMITS.question);
+    const rawOpts = Array.isArray(q && q.options) ? q.options : [];
+    const opts = [];
+    let anyPicture = false, brokenPicture = false;
+    for (const o of rawOpts) {
+      const isObj = !!o && typeof o === "object" && !Array.isArray(o);
+      const label = clip(isObj ? (o.text != null ? o.text : o.label) : o, QUIZ_LIMITS.option).replace(/^[A-Da-d][).:]\s+/, "");
+      let picture = null;
+      if (isObj && given(o.visual)) { picture = cleanVisual(o.visual); if (!picture) brokenPicture = true; }
+      if (picture) anyPicture = true;
+      if (label || picture) opts.push({ text: label, ...(picture ? { visual: picture } : {}) });
+    }
+    if (brokenPicture || !text || opts.length < 2 || opts.length > 6) continue;
+    const labels = opts.map(o => o.text);
     let ans = Number.isInteger(q.answer) ? q.answer : Number.isInteger(q.correct) ? q.correct : -1;
     if (ans < 0 && typeof q.answer === "string") {
       const L = q.answer.trim().toUpperCase();
-      ans = /^[A-F]$/.test(L) ? L.charCodeAt(0) - 65 : opts.findIndex(o => o.toLowerCase() === q.answer.trim().toLowerCase());
+      ans = /^[A-F]$/.test(L) ? L.charCodeAt(0) - 65 : labels.findIndex(o => o.toLowerCase() === q.answer.trim().toLowerCase());
     }
     if (ans < 0 || ans >= opts.length) continue;
-    const visual = cleanVisual(q.visual);
-    questions.push({ question: text, options: opts, answer: ans, explanation: clip(q.explanation, 500), ...(visual ? { visual } : {}) });
+    let visual = null, chart = null, explanationVisual = null;
+    if (given(q.visual)) { visual = cleanVisual(q.visual); if (!visual) continue; }
+    if (given(q.chart)) { chart = cleanChart(q.chart); if (!chart) continue; }
+    if (given(q.explanationVisual)) explanationVisual = cleanVisual(q.explanationVisual); // only a bonus: quietly left out if it can't be drawn
+    questions.push({
+      question: text,
+      options: anyPicture ? opts : labels, // plain strings unless some option is a picture
+      answer: ans,
+      explanation: clip(q.explanation, QUIZ_LIMITS.explanation),
+      ...(visual ? { visual } : {}), ...(chart ? { chart } : {}), ...(explanationVisual ? { explanationVisual } : {}),
+    });
     if (questions.length >= want) break;
   }
   return questions.length ? { title: clip(raw.title, 80), questions } : null;
@@ -97,7 +160,7 @@ function cleanCards(raw, want) {
 const MAX_STUDY_PHOTOS = 6; // read in batches of 3 (the vision model's per-request limit)
 
 async function transcribeChunk(list, start) {
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const response = await fetch(groq.url(), { // GROQ_API_URL can point this elsewhere (the tests do), same as the chat route
     method: "POST",
     headers: groq.authHeaders(), // the shared key, or the person's own (lib/groq.js)
     body: JSON.stringify({
@@ -193,9 +256,9 @@ app.post("/study", needUser, L.study, async (req, res) => {
 
     if (mode === "quiz") {
       const raw = await groqStudy(
-        `You write multiple-choice quizzes. Reply with ONLY a JSON object: {"title": string, "questions": [{"question": string, "options": [4 strings], "answer": index 0-3 of the correct option, "explanation": one or two sentences on why it is correct}]}. Write exactly ${count} questions. Exactly one option is correct, the wrong options must be plausible, and the correct answer must vary in position. Do not put letters like "A)" in the options. Mix easy and harder questions. If study material is provided, only ask about what it contains. If the material is homework or a worksheet of problems, write questions that test the same skills and concepts (you may reuse or vary the problems); write math as LaTeX inside \\( ... \\). For math questions that depend on a picture (reading a graph, a number line, a geometry figure), you may add a "visual" field to that question holding a mathviz JSON object as described here; the question must be answerable from that picture, and most questions need no visual. ${MATH_VISUALS_GUIDE}`,
-        source, { json: true, maxTokens: 4000 });
-      const quiz = cleanQuiz(parseJsonLoose(raw), count);
+        `You write multiple-choice quizzes. Reply with ONLY a JSON object: {"title": string, "questions": [{"question": string, "options": [4 strings], "answer": index 0-3 of the correct option, "explanation": one or two sentences on why it is correct}]}. Write exactly ${count} questions. Exactly one option is correct, the wrong options must be plausible, and the correct answer must vary in position. Do not put letters like "A)" in the options. Mix easy and harder questions. If study material is provided, only ask about what it contains. If the material is homework or a worksheet of problems, write questions that test the same skills and concepts (you may reuse or vary the problems). ${QUIZ_FORMULA_RULES} ${QUIZ_PICTURE_RULES} ${MATH_VISUALS_GUIDE}`,
+        source, { json: true, maxTokens: 6000 });
+      const quiz = cleanQuiz(parseJsonLoose(raw, { latex: true }), count);
       if (!quiz) return res.status(502).json({ error: "I couldn't build a quiz from that. Try again or give me a more specific topic." });
       if (!quiz.title) quiz.title = topic || "Quiz";
       return res.json({ reply: "Here's your quiz. Pick an answer for each question.\n\n```quiz\n" + JSON.stringify(quiz) + "\n```" });

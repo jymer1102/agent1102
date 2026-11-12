@@ -225,7 +225,7 @@ app.post("/chat", L.chat, L.chatSignedOut, async (req, res) => {
       : "The user asked you to remember something, but their memory is switched off. Tell them to turn Memory on in Settings (their profile at the bottom of the sidebar), under AI, then ask again.");
     if (user && style.memory && mc.forget) parts.push("The user asked you to forget something. Confirm in one short sentence that it is being removed from memory.");
     if (fitted.trimmed) parts.push("The oldest part of this long conversation was left out to save space. If the user refers to something you cannot see, say so and ask them to repeat it.");
-    if (mentionsJymer) parts.push("The user's latest message is about jymer1102. Include both links, each as a plain URL on its own line: https://jymer1102.github.io/jymer1102 and https://linktr.ee/jymer1102");
+    if (mentionsJymer) parts.push("The user's latest message is about jymer1102. Include both links, each as a plain URL on its own line: https://jymer1102.com and https://linktr.ee/jymer1102");
     const systemPrompt = parts.filter(Boolean).join("\n\n");
 
     // 3) the model (low thinking effort for quick chat turns = faster first word)

@@ -105,4 +105,4 @@ async function stream(body, onDelta, signal) {
   return full;
 }
 
-module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError, AI_PROBLEM, AI_NO_REPLY, runWithKey, usingOwnKey, authHeaders: headers, KEY_REJECTED };
+module.exports = { complete, stream, GroqError, parseResetSeconds, rateLimitText, describeError, AI_PROBLEM, AI_NO_REPLY, runWithKey, usingOwnKey, authHeaders: headers, url: GROQ_URL, KEY_REJECTED };

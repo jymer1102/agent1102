@@ -33,10 +33,11 @@ const openSettings = async (app, page) => {
 
 (async () => {
   console.log("layout");
-  await t("the header keeps only the history button, the title, theme and delete-chat: no new chat, profile or log out", () => withApp({}, async app => {
+  await t("the header keeps only the history button and the title: no theme, delete-chat, new chat, profile or log out", () => withApp({}, async app => {
     const header = app.$("header");
-    for (const id of ["new-chat-btn", "profile-btn", "logout-btn", "settings-btn"]) assert(!header.querySelector("#" + id), id + " must not be in the header");
-    assert(header.querySelector("#history-btn") && header.querySelector("#theme-btn") && header.querySelector("#clear-btn"));
+    for (const id of ["new-chat-btn", "profile-btn", "logout-btn", "settings-btn", "theme-btn", "clear-btn"]) assert(!header.querySelector("#" + id), id + " must not be in the header");
+    assert(header.querySelector("#history-btn") && header.querySelector("#header-title"));
+    assert(header.querySelector("#header-btns"), "the (now empty) right side stays: the easter-egg buttons are added there");
   }));
   await t("the sidebar has no title bar: New chat top-left, then Clear All and the close button; the Settings button is last", () => withApp({}, async app => {
     const sb = app.$("#sidebar");
@@ -48,6 +49,7 @@ const openSettings = async (app, page) => {
     const kids = [...sb.children].map(c => c.id);
     assert.deepStrictEqual(kids, ["sidebar-top", "sidebar-list", "sidebar-footer"]);
     assert(app.$("#sidebar-footer #settings-btn"));
+    assert(app.$("#sidebar-footer #theme-btn"), "the theme toggle lives in the sidebar footer, next to Settings");
   }));
   await t("New chat in the sidebar starts a fresh chat and closes the sidebar", () => withApp({}, async app => {
     app.$("#history-btn").click(); await app.sleep(40);

@@ -1750,8 +1750,35 @@
     }
   };
 
+  // Plain text that may hold formulas, drawn for the quiz widget (no markdown, so option text stays exactly as written).
+  // \( ... \), \[ ... \] and $$ ... $$ become real math; chemistry works with \ce{...} inside them.
+  function renderMathText(target, text) {
+    const { text: plain, math } = extractMath(String(text == null ? "" : text));
+    target.textContent = plain; // until renderMathIn swaps them, the formulas are only placeholder characters
+    renderMathIn(target, math);
+    return target;
+  }
+
+  // A data chart (bar / line / pie / donut / radar) for a quiz question. Returns { node, draw, destroy }, or null when the
+  // data can't be drawn. Chart.js needs the canvas to be in the page, so the caller calls draw() once node is attached.
+  function buildStudyChart(rawSpec) {
+    if (typeof Chart === "undefined") return null;
+    let spec;
+    try { spec = normalizeChartSpec(rawSpec); } catch (_) { return null; }
+    const block = buildChartBlock(JSON.stringify(spec));
+    const entry = block._entry;
+    if (!entry) return null;
+    block.classList.add("quiz-chart");
+    return {
+      node: block,
+      draw: () => { if (entry.canvas.isConnected) drawChart(entry, true); },
+      destroy: () => { if (entry.chart) { entry.chart.destroy(); entry.chart = null; } liveCharts.delete(entry); },
+    };
+  }
+
   // Exposed for testing / other scripts
   window.agent1102Render = {
+    renderMathText, buildStudyChart,
     normalizeChartSpec, responseToText, chunkText, parseImageRequest, parseImageEditRequest,
     parseAttachedFiles, historyTitle, escapeHtml, mathToSpeech, speakableText, extractMath, fileChipIcon,
     buildLinkCard, renderDraft, tidyDraft, webImagesText, buildWebImages,

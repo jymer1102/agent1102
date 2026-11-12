@@ -15,7 +15,7 @@ const b64 = o => Buffer.from(JSON.stringify(o)).toString("base64url");
 // a token that looks like a real, unexpired sign-in (the page reads its expiry)
 const fakeToken = () => `${b64({ alg: "HS256" })}.${b64({ sub: "11111111-1111-4111-8111-111111111111", exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
 
-async function bootApp({ routes = {}, storage = {}, session = {}, light = false, signedOut = false, url = "http://localhost/" } = {}) {
+async function bootApp({ routes = {}, storage = {}, session = {}, light = false, signedOut = false, url = "http://localhost/", pre } = {}) {
   let html = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const scripts = [...html.matchAll(/<script src="(js\/[^"?]+)(?:\?[^"]*)?"><\/script>/g)].map(m => m[1]);
   html = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<link[^>]*>/g, "");
@@ -72,6 +72,7 @@ async function bootApp({ routes = {}, storage = {}, session = {}, light = false,
   run(NM("marked", "marked.min.js"), "marked.js");
   run(NM("dompurify", "dist", "purify.min.js"), "purify.js");
   w.addEventListener("error", e => errors.push(e.error || e.message));
+  if (pre) pre(w); // e.g. a fake SpeechRecognition: the page decides at load time whether voice input exists
   for (const s of scripts) {
     try { run(fs.readFileSync(path.join(PUBLIC, s), "utf8"), s); }
     catch (e) { errors.push(new Error(s + ": " + e.message)); }
