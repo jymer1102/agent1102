@@ -29,7 +29,6 @@ const BACKEND_URL = "https://agent1102.onrender.com";
   const previewImg = document.getElementById("preview-img");
   const removeImgBtn = document.getElementById("remove-img");
   const themeBtn = document.getElementById("theme-btn");
-  const clearBtn = document.getElementById("clear-btn");
   const micBtn = document.getElementById("mic-btn");
   const historyBtn = document.getElementById("history-btn");
   const newChatBtn = document.getElementById("new-chat-btn");

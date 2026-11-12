@@ -19,6 +19,7 @@ const TEST_SECRET = "test-only-encryption-secret-0123456789"; // keys are encryp
 const groqAuths = []; // the Authorization header of each call in groqCalls, same order: shows WHICH key was used
 const modelsChecks = []; let modelsMode = "ok"; // key checks (GET /models) made when someone saves their own key
 let groqMode = "normal";
+let quizReply = "{}"; // what the fake AI answers when it is asked to write a quiz (/study)
 const groqServer = http.createServer((req, res) => {
   if (/\/models$/.test(req.url)) { // the "is this key real?" check made when someone saves their own Groq key
     const key = (req.headers.authorization || "").replace("Bearer ", ""); modelsChecks.push(key);
@@ -40,6 +41,7 @@ const groqServer = http.createServer((req, res) => {
       content = JSON.stringify({ add: /nursing/.test(said) ? [{ kind: "fact", content: "Is studying nursing at KU" }] : /robot/.test(said) ? [{ kind: "project", content: "Is building a robot" }] : [], forget: [] });
     }
     else if (/automatic checker found problems/.test(lastText)) content = groqMode === "unfixable" ? "```python\ndef f(x)\n    return x\n```" : "Fixed:\n```python\ndef f(x):\n    return x\n```";
+    else if (/You write multiple-choice quizzes/.test(sys)) content = quizReply;
     else if (/BADPY/.test(lastText)) content = "Here:\n```python\ndef f(x)\n    return x\n```";
     else content = "Hello there, friend. This streams in pieces.";
     if (body.stream) {
@@ -563,6 +565,110 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert(/Not a new high score/.test(await say(150)));
     await Promise.all([save(300), save(400), save(350), save(250)]); // finish in any order
     assert.strictEqual(scoreRows.pacman_highscores[USER.id].high_score, 400);
+  });
+
+  console.log("\nthe creator link");
+  await t("asking about jymer1102 hands the AI https://jymer1102.com (and the Linktree), never the old github.io address", async () => {
+    await chat("who is jymer1102?", { token: TOKEN });
+    const all = JSON.stringify(groqCalls[groqCalls.length - 1].messages);
+    assert(all.includes("https://jymer1102.com"), "new address is in the instructions");
+    assert(all.includes("https://linktr.ee/jymer1102"));
+    assert(!all.includes("github.io"), "old address is gone");
+  });
+  await t("a link card for jymer1102.com shows the site's name and banner (the old address still gets its card in saved chats)", async () => {
+    const get = async u => (await send("GET", "/link-preview?url=" + encodeURIComponent(u), { token: TOKEN })).json();
+    const now = await get("https://jymer1102.com/");
+    assert.strictEqual(now.title, "jymer1102"); assert(/jymer1102_horizontal_banner/.test(now.image || "")); assert.strictEqual(now.siteName, "jymer1102.com");
+    const old = await get("https://jymer1102.github.io/jymer1102");
+    assert.strictEqual(old.title, "jymer1102");
+  });
+
+  console.log("\n/quiz: formulas and pictures");
+  // What a model really sends back: LaTeX with the backslashes NOT doubled (invalid JSON for \( and \sqrt, and silent
+  // corruption for \frac \theta \neq, which JSON reads as form feed / tab / new line), plus pictures of every kind.
+  const QUIZ_RAW = String.raw`{"title":"Algebra and more","questions":[
+    {"question":"What is \(\frac{1}{2} + \frac{1}{4}\)?","options":["\(\frac{3}{4}\)","\(\frac{2}{6}\)","\(\sqrt{2}\)","\(1\)"],"answer":0,"explanation":"Use a common denominator: $$\frac{2}{4}+\frac{1}{4}=\frac{3}{4}$$"},
+    {"question":"Simplify \\(\\frac{6}{8}\\)","options":["\\(\\frac{3}{4}\\)","\\(\\frac{2}{3}\\)","\\(\\frac{1}{2}\\)","\\(\\frac{4}{5}\\)"],"answer":0,"explanation":"Divide top and bottom by 2."},
+    {"question":"Which is true when \(\theta \neq 0\) and \(x \times y \to \infty\)?","options":["A","B","C","D"],"answer":1,"explanation":"\(\text{just a test}\)"},
+    {"question":"Where does this graph cross the x-axis?","options":["-2 and 2","0","4","-4 and 4"],"answer":0,"explanation":"x^2 - 4 = 0 at x = 2 and x = -2.","visual":{"type":"graph","functions":[{"expr":"x^2-4"}],"xMin":-5,"xMax":5,"yMin":-5,"yMax":10},"explanationVisual":{"type":"graph","functions":[{"expr":"x^2-4"}],"points":[{"x":2,"y":0},{"x":-2,"y":0}],"xMin":-5,"xMax":5,"yMin":-5,"yMax":10}},
+    {"question":"Which picture is a made-up kind?","options":["a","b","c","d"],"answer":0,"explanation":"x","visual":{"type":"hologram","stuff":[1]}},
+    {"question":"Which month had the most sales?","options":["Jan","Feb","Mar","Apr"],"answer":1,"explanation":"Feb is the tallest bar.","chart":{"type":"bar","title":"Sales","labels":["Jan","Feb","Mar"],"datasets":[{"label":"Units","data":[12,30,21]}],"xLabel":"Month","yLabel":"Units"}},
+    {"question":"What share is the biggest slice?","options":["a","b","c","d"],"answer":0,"explanation":"x","chart":{"type":"pie","labels":["a","b","c"],"datasets":[{"data":[1,2]}]}},
+    {"question":"Which graph shows \(y = x^2\)?","options":[{"text":"","visual":{"type":"graph","functions":[{"expr":"x^2"}]}},{"text":"","visual":{"type":"graph","functions":[{"expr":"-x^2"}]}},{"text":"line","visual":{"type":"graph","functions":[{"expr":"x"}]}}],"answer":0,"explanation":"A parabola opening upwards."},
+    {"question":"Balance \(\ce{H2 + O2 -> H2O}\)","options":["\(\ce{2H2 + O2 -> 2H2O}\)","\(\ce{H2 + O2 -> H2O}\)","\(\ce{H2 + 2O2 -> H2O}\)","\(\ce{2H2 + 2O2 -> H2O}\)"],"answer":0,"explanation":"Two H2 make two H2O.","explanationVisual":{"type":"hologram"}}
+  ]}`;
+  const askQuiz = async (reply, body = {}) => { quizReply = reply; return post("/study", { mode: "quiz", topic: "algebra", ...body }, { token: TOKEN }); };
+  const quizOf = async r => { const j = await r.json(); const m = /```quiz\n([\s\S]*?)\n```/.exec(j.reply || ""); assert(m, "a quiz block in the reply: " + JSON.stringify(j).slice(0, 200)); return JSON.parse(m[1]); };
+  await t("the AI is told how to write formulas, chemistry and every kind of picture", async () => {
+    const r = await askQuiz(QUIZ_RAW);
+    assert.strictEqual(r.status, 200);
+    const sys = sysOf();
+    for (const need of ["FORMULAS:", "\\ce{", "PICTURES:", '"chart"', '"explanationVisual"', "Which graph shows", "MATH VISUALS"]) assert(sys.includes(need), "prompt mentions " + need);
+  });
+  await t("formulas survive even when the AI forgets to double its backslashes (no form feeds, tabs or lost quizzes)", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    assert.strictEqual(quiz.questions[0].question, "What is \\(\\frac{1}{2} + \\frac{1}{4}\\)?");
+    assert.deepStrictEqual(quiz.questions[0].options, ["\\(\\frac{3}{4}\\)", "\\(\\frac{2}{6}\\)", "\\(\\sqrt{2}\\)", "\\(1\\)"]);
+    assert(quiz.questions[0].explanation.includes("$$\\frac{2}{4}+\\frac{1}{4}=\\frac{3}{4}$$"), "display math in the explanation");
+    assert.strictEqual(quiz.questions[1].question, "Simplify \\(\\frac{6}{8}\\)", "properly doubled backslashes are left alone");
+    assert.strictEqual(quiz.questions[2].question, "Which is true when \\(\\theta \\neq 0\\) and \\(x \\times y \\to \\infty\\)?", "\\theta \\neq \\times \\to");
+    assert.strictEqual(quiz.questions[2].explanation, "\\(\\text{just a test}\\)");
+    assert(!/[\f\t\r\b\v]/.test(JSON.stringify(quiz.questions).replace(/\\[ftrbv]/g, "")) && !/\\[ftrb](?![a-z])/.test(JSON.stringify(quiz.questions).replace(/\\\\/g, "")), "no control characters were made");
+  });
+  await t("chemistry (\\ce) formulas pass through untouched", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    const chem = quiz.questions.find(q => /ce\{H2 \+ O2/.test(q.question));
+    assert(chem, "the chemistry question is kept");
+    assert.strictEqual(chem.options[0], "\\(\\ce{2H2 + O2 -> 2H2O}\\)");
+  });
+  await t("a graph on a question is kept; so is a picture that shows after answering; a broken bonus picture is just left out", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    const g = quiz.questions.find(q => /cross the x-axis/.test(q.question));
+    assert(g && g.visual && g.visual.type === "graph" && g.visual.functions[0].expr === "x^2-4", "question graph");
+    assert(g.explanationVisual && g.explanationVisual.points.length === 2, "explanation graph");
+    const chem = quiz.questions.find(q => /Balance/.test(q.question));
+    assert(chem && !("explanationVisual" in chem), "an explanationVisual that can't be drawn is dropped, the question stays");
+  });
+  await t("a question whose picture can't be drawn is dropped (it would be unanswerable without it)", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    assert(!quiz.questions.some(q => /made-up kind/.test(q.question)), "bad picture type");
+    assert(!quiz.questions.some(q => /biggest slice/.test(q.question)), "chart whose data doesn't line up");
+    assert.strictEqual(quiz.questions.length, 7);
+  });
+  await t("data charts (bar, line, pie, donut, radar) on a question are checked and kept", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    const c = quiz.questions.find(q => /most sales/.test(q.question));
+    assert.deepStrictEqual(c.chart, { type: "bar", title: "Sales", labels: ["Jan", "Feb", "Mar"], datasets: [{ label: "Units", data: [12, 30, 21] }], xLabel: "Month", yLabel: "Units" });
+    const mk = (type, extra = {}) => JSON.stringify({ title: "t", questions: [{ question: "q?", options: ["a", "b"], answer: 0, explanation: "e", chart: { type, labels: ["x", "y"], datasets: [{ label: "s", data: [3, "4"] }], ...extra } }] });
+    for (const [asked, want] of [["line", "line"], ["Donut", "doughnut"], ["spider", "radar"], ["column chart", "bar"]]) {
+      const q = (await quizOf(await askQuiz(mk(asked)))).questions[0];
+      assert.strictEqual(q.chart.type, want, asked);
+      assert.deepStrictEqual(q.chart.datasets[0].data, [3, 4], "numbers written as text are read as numbers");
+    }
+    const bad = await askQuiz(mk("pie", { datasets: [{ data: [-1, 2] }] }));
+    assert.strictEqual(bad.status, 502, "a pie chart with a negative slice is refused, and with no other question there is no quiz");
+  });
+  await t("options can be pictures ('which graph shows...?'): every option keeps its own picture", async () => {
+    const quiz = await quizOf(await askQuiz(QUIZ_RAW));
+    const q = quiz.questions.find(x => /Which graph shows/.test(x.question));
+    assert.strictEqual(q.options.length, 3);
+    assert(q.options.every(o => typeof o === "object" && o.visual && o.visual.type === "graph"));
+    assert.strictEqual(q.options[2].text, "line");
+    assert.strictEqual(q.answer, 0);
+    const plain = quiz.questions[0];
+    assert(plain.options.every(o => typeof o === "string"), "ordinary questions keep plain-string options (older quizzes look the same)");
+  });
+  await t("number lines and fractions work as pictures too, and 'no picture' written as null / {} / '' is fine", async () => {
+    const quiz = await quizOf(await askQuiz(JSON.stringify({ title: "t", questions: [
+      { question: "Which inequality is shown?", options: ["x > -2", "x < 3"], answer: 0, explanation: "e", visual: { type: "numberline", min: -5, max: 5, intervals: [{ from: -2, fromOpen: true }] } },
+      { question: "What fraction is shaded?", options: ["3/4", "1/4"], answer: 0, explanation: "e", visual: { type: "fraction", items: [{ numerator: 3, denominator: 4, shape: "circle" }] } },
+      { question: "Plain one", options: ["a", "b"], answer: 1, explanation: "e", visual: null, chart: {}, explanationVisual: "" },
+    ] })));
+    assert.strictEqual(quiz.questions.length, 3);
+    assert.strictEqual(quiz.questions[0].visual.type, "numberline");
+    assert(!("from" in quiz.questions[0].visual.intervals[0]) || quiz.questions[0].visual.intervals[0].from === -2);
+    assert.strictEqual(quiz.questions[1].visual.type, "fraction");
+    assert(!("visual" in quiz.questions[2]) && !("chart" in quiz.questions[2]) && !("explanationVisual" in quiz.questions[2]));
   });
   console.log("\nSettings -> AI: preferences, usage-limit advice, and the person's own Groq key");
   const MYKEY = "gsk_valid" + "Q1w2E3r4".repeat(4) + "wxyz"; // passes the shape check and the fake Groq accepts it

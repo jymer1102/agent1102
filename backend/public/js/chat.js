@@ -502,9 +502,17 @@ document.addEventListener("DOMContentLoaded", () => {
     recognition.interimResults = false;
     recognition.lang = "en-US";
     
+    // The bars inside the message box (js/voice-viz.js) show while the microphone is listening
+    const vizStart = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.start(); };
+    const vizStop = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.stop(); };
+    const vizSpeaking = on => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.setSpeaking(on); };
+    recognition.onspeechstart = () => vizSpeaking(true);
+    recognition.onspeechend = () => vizSpeaking(false);
+
     recognition.onstart = () => {
       micBtn.classList.add("recording");
       isRecording = true;
+      vizStart();
       if (typeof showToast === 'function') showToast('<i class="fa-solid fa-microphone"></i> Listening...');
     };
     
@@ -517,6 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       micBtn.classList.remove("recording");
       isRecording = false;
+      vizStop();
     };
     
     recognition.onerror = (e) => {
@@ -534,11 +543,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       micBtn.classList.remove("recording");
       isRecording = false;
+      vizStop();
     };
     
     recognition.onend = () => {
       micBtn.classList.remove("recording");
       isRecording = false;
+      vizStop();
     };
 
     micBtn.addEventListener("click", () => {

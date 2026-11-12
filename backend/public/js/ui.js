@@ -18,18 +18,6 @@
   // New chat (keeps the old behavior: saves the current chat, then starts fresh)
   newChatBtn.addEventListener("click", () => { saveCurrentChat(); history = []; chatEl.innerHTML = ""; currentChatId = Date.now().toString(); currentChatTitle = null; currentChatTitleLocked = false; titleAtCount = 0; addGreeting(); closeSidebarFn(); });
 
-  // Trash-can button: permanently deletes the CURRENT chat (not just clears the view)
-  clearBtn.addEventListener("click", async () => {
-    if (!confirm("Delete this chat? This can't be undone.")) return;
-    if (userToken && currentChatId) {
-      try {
-        await fetch(`${BACKEND_URL}/chats/${currentChatId}`, { method: "DELETE", headers: { "Authorization": `Bearer ${userToken}` } });
-      } catch { console.error("Failed to delete chat"); }
-    }
-    history = []; chatEl.innerHTML = ""; currentChatId = Date.now().toString(); currentChatTitle = null; currentChatTitleLocked = false; titleAtCount = 0; addGreeting();
-    if (sidebar.classList.contains("open")) await loadChats();
-  });
-
   // Clear all chats
   clearAllBtn.addEventListener("click", async () => {
     if (!confirm("Delete all chat history? This can't be undone.")) return;
