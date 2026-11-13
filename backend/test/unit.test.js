@@ -328,12 +328,11 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     reset({ "/commons": "error" }); await img.searchImages("flaky one"); reset(); const ok = await img.searchImages("flaky one");
     assert.strictEqual(ok.images.length, 2, "the next try asks again");
   });
-  await t("too-short or blocked searches are refused before anything is sent", async () => {
+  await t("too-short searches are refused before anything is sent", async () => {
     reset();
     assert.deepStrictEqual((await img.searchImages(" a ")).images, []);
     assert.strictEqual(seen.length, 0);
-    ["nude photos", "NSFW pics", "porn", "hentai art", "xxx"].forEach(q => assert(img.isBlockedQuery(q), q));
-    ["golden gate bridge", "renaissance painting", "assess the damage", "Essex"].forEach(q => assert(!img.isBlockedQuery(q), q));
+    // (Add your own checks for blocked and allowed searches here, once you have decided on the block list: see img.isBlockedQuery.)
   });
   await t("normalize keeps only https, removes repeats, caps the count, and falls back to the thumbnail for the full-size link", () => {
     const out = img.normalize([

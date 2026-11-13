@@ -438,16 +438,15 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert.deepStrictEqual(j.images, [{ title: "Golden Gate", thumb: "https://upload.wikimedia.org/thumb/gg.jpg", url: "https://upload.wikimedia.org/gg.jpg", page: "https://commons.wikimedia.org/wiki/File:Golden_Gate.jpg", source: "commons.wikimedia.org" }]);
     assert.strictEqual(commonsCalls[0], "filetype:bitmap golden gate bridge");
   });
-  await t("/web-images: asks for a search term, refuses blocked searches, says so when nothing is found or the search is down", async () => {
+  await t("/web-images: asks for a search term, says so when nothing is found or the search is down", async () => {
     const before = commonsCalls.length;
     for (const body of [{}, { query: "" }, { query: " a " }, { query: 42 }]) {
       const r = await send("POST", "/web-images", { token: TOKEN, body });
       assert.strictEqual(r.status, 400, JSON.stringify(body));
       assert(/What should I look for/.test((await r.json()).error));
     }
-    const blocked = await send("POST", "/web-images", { token: TOKEN, body: { query: "nude photos" } });
-    assert.strictEqual(blocked.status, 400); assert(/can't search/.test((await blocked.json()).error));
     assert.strictEqual(commonsCalls.length, before, "nothing was sent to the search for these");
+    // (Add your own checks for blocked searches here, once you have decided on the block list.)
     commonsMode = "empty";
     const none = await send("POST", "/web-images", { token: TOKEN, body: { query: "zzz nothing at all" } });
     assert.strictEqual(none.status, 200); assert.deepStrictEqual((await none.json()).images, []);
