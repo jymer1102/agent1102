@@ -28,12 +28,16 @@ alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 
 -- ---------------------------------------------------------------- saved chats
+-- Each row says who wrote it: user_id is the exact account (and is what every lookup uses); author is that person's name,
+-- so the Table Editor shows who a chat belongs to without looking the id up. (username holds the same name and is kept for
+-- older code; email and phone are the account's contact details at the time of saving.)
 -- The page makes a chat's id from the clock (a number of milliseconds), so two people could in theory pick the same
 -- id. The primary key is (user_id, id) so that never matters: each person's chats are their own. (The server also
 -- refuses to save over a chat id that belongs to someone else.)
 create table if not exists public.chats (
   id          text not null,
   user_id     uuid not null references auth.users(id) on delete cascade,
+  author      text,
   username    text,
   email       text,
   phone       text,
@@ -44,11 +48,20 @@ create table if not exists public.chats (
   primary key (user_id, id)
 );
 -- for projects whose chats table was made before these columns existed (what chats.sql was meant to do)
+alter table public.chats add column if not exists author text;
 alter table public.chats add column if not exists username text;
 alter table public.chats add column if not exists email text;
 alter table public.chats add column if not exists phone text;
 alter table public.chats add column if not exists updated_at timestamptz not null default now();
 create index if not exists chats_user_created_idx on public.chats (user_id, created_at desc);
+-- fill in the author of chats saved before this column existed: the saved name, else the profile's name, else the start of the email
+update public.chats c
+set author = coalesce(
+  nullif(c.username, ''),
+  (select nullif(p.name, '') from public.profiles p where p.id = c.user_id),
+  (select nullif(split_part(u.email, '@', 1), '') from auth.users u where u.id = c.user_id)
+)
+where c.author is null or c.author = '';
 
 -- OPTIONAL, only if your existing chats table has "id" alone as its primary key (check in the Table Editor):
 -- this makes it match the table above. Not needed for safety, because the server now checks chat ownership.

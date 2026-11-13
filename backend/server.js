@@ -13,7 +13,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
-const { createAuth } = require("./lib/auth");
+const { createAuth, isBanned } = require("./lib/auth");
 const security = require("./lib/security");
 const { createLimiter } = require("./lib/ratelimit");
 const { wrapAsyncRoutes } = require("./lib/asyncwrap");
@@ -89,6 +89,8 @@ const MSG = {
   session: "Your session has expired. Please sign in again.",
   tooLarge: "That request is too large. Try something smaller.",
   badRequest: "I couldn't read that request. Please try again.",
+  // shown at sign-in, after a Discord/GitHub sign-in, and when someone is banned while signed in (the page signs them out)
+  banned: "This account has been banned or suspended, so it can't be used right now. If you think this is a mistake, please contact the site owner.",
 };
 // Logs the real problem (when there is one) and answers with a message that is safe to show
 function fail(res, status, message, err) {
@@ -103,6 +105,7 @@ function friendlyAuthError(error, fallback) {
   const code = String((error && error.code) || "").toLowerCase();
   const text = String((error && error.message) || "");
   const has = re => re.test(text);
+  if (code === "user_banned" || has(/user is banned|\bbanned\b/i)) return MSG.banned;
   if (code === "invalid_credentials" || has(/invalid login credentials/i)) return "That email or password isn't right. Please try again.";
   if (code === "email_not_confirmed" || has(/email not confirmed/i)) return "Please confirm your email first. Check your inbox for the confirmation link.";
   if (code === "user_already_exists" || code === "email_exists" || has(/already (been )?registered|already exists/i)) return "An account with that email already exists. Try signing in instead.";
@@ -184,6 +187,9 @@ const L = {
   emailAddr: createLimiter({ windowMs: 60 * MIN, max: 4, key: emailKey, message: slowDown("Too many emails to that address. Please wait before asking again.") }),
   // emails and codes for someone who IS signed in (change email, send code), and tries at entering a code
   emailPerson: createLimiter({ windowMs: 60 * MIN, max: 8, key: personKey, message: slowDown("Too many emails requested. Please wait a while before trying again.") }),
+  // typing the 6-digit code from a sign-up / reset email (not signed in): per address, and per person asking
+  codeIp: createLimiter({ windowMs: 15 * MIN, max: 40, key: ipKey, message: slowDown("Too many code attempts from here.") }),
+  codeEmail: createLimiter({ windowMs: 15 * MIN, max: 10, key: emailKey, message: slowDown("Too many tries for that account.") }),
   codeTries: createLimiter({ windowMs: 15 * MIN, max: 10, key: personKey, message: slowDown("Too many tries. Please wait a few minutes.") }),
   refresh: createLimiter({ windowMs: 15 * MIN, max: 120, key: ipKey, message: slowDown("Too many requests.") }),
   scores: createLimiter({ windowMs: 10 * MIN, max: 60, key: ipKey, message: slowDown("Too many scores sent.") }),
@@ -203,6 +209,32 @@ app.use(L.everything); // a generous per-address backstop for every API route (t
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
+// ============================================================
+//  Banned / suspended people
+//  Supabase stops a banned person signing in or refreshing, but a sign-in they already hold keeps working for up to an hour
+//  (and Supabase's own endpoints still accept it). So every request that carries a sign-in is checked here, before any route
+//  runs: a banned or suspended account gets a 403 with code "user_banned", and the page signs the person out at once.
+//  auth.verify is cached for a minute and routes ask for the same user anyway, so this adds no extra calls to Supabase.
+// ============================================================
+const lastRevoke = new Map(); // user id -> when their Supabase sessions were last ended
+function revokeSessions(user, token) {
+  const now = Date.now();
+  if (now - (lastRevoke.get(user.id) || 0) < 10 * 60 * 1000) return;
+  lastRevoke.set(user.id, now);
+  if (lastRevoke.size > 1000) lastRevoke.delete(lastRevoke.keys().next().value);
+  // best effort: ends every session and refresh token this person has, so no other device keeps going. (Supabase still lets a banned token call /logout.)
+  Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(token, "global")).catch(e => console.warn("Ending a banned user's sessions failed:", e && e.message ? e.message : e));
+}
+app.use(async (req, res, next) => {
+  const token = auth.bearer(req) || (req.body && typeof req.body.token === "string" ? req.body.token : null);
+  if (!token) return next();
+  let user;
+  try { user = await auth.verify(token); } catch (_) { return next(); } // can't tell: the route's own check decides
+  if (!user || !isBanned(user)) return next();
+  revokeSessions(user, token);
+  res.status(403).json({ error: MSG.banned, code: "user_banned" });
+});
+
 
 // ============================================================
 //  The features. Each lives in its own file in routes/ and receives `ctx` (the shared pieces above).
@@ -219,7 +251,7 @@ const userMeta = createUserMeta({ supabaseAdmin, auth });
 const secretBox = createSecretBox(process.env.KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_KEY);
 const userSettings = createUserSettings({ supabaseAdmin, box: secretBox, ttlMs: Number(process.env.SETTINGS_CACHE_MS) || 60 * 1000 }); // (the cache is cleared whenever the person saves a change; the env variable only lets tests shorten it)
 const ctx = {
-  app, supabase, supabaseAdmin, auth, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
+  app, supabase, supabaseAdmin, auth, isBanned, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
   TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, MATH_VISUALS_GUIDE, ROOT,
 };
 // Requests that call the AI run with the person's own Groq key if they saved one (otherwise the shared key, as before).

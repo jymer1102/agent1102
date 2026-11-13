@@ -1,13 +1,15 @@
 // Saved chats: list, save, rename, delete (/chats).
 // (The code below is moved unchanged from the old single-file server.js; shared things arrive through `ctx`.)
 
+const { withPlus } = require("../lib/phone");
+
 module.exports = function registerChats(ctx) {
 const { app, supabase, supabaseAdmin, auth, MSG, fail, cleanChatTitle, generateChatTitle, lockedChatIds, patchUserMetadata, setChatLocked } = ctx;
 
 // --- CHATS ---
-// One row per conversation. Every row carries the owner's uid (user_id), username, email and phone,
-// plus the FULL conversation in `history` (jsonb). Run supabase/chats.sql once to add the columns
-// and lock the table down with Row Level Security. All access goes through the service key here,
+// One row per conversation. Every row carries the owner's uid (user_id), the AUTHOR (the name of the person who
+// wrote the chat), username, email and phone, plus the FULL conversation in `history` (jsonb). Run supabase/schema.sql
+// once to add the columns and lock the table down with Row Level Security. All access goes through the service key here,
 // always filtered by the user id taken from the verified token.
 async function getUserInfo(userId) {
   const { data: p } = await supabaseAdmin.from("profiles").select("name, email, phone").eq("id", userId).maybeSingle();
@@ -20,7 +22,7 @@ async function getUserInfo(userId) {
   return {
     username: p?.name || u?.user_metadata?.name || u?.user_metadata?.full_name || email?.split("@")[0] || "Player",
     email,
-    phone: p?.phone || u?.phone || u?.user_metadata?.phone || null,
+    phone: p?.phone || withPlus(u?.phone) || u?.user_metadata?.phone || null,
   };
 }
 
@@ -45,6 +47,7 @@ app.post("/chats", async (req, res) => {
     const now = new Date().toISOString();
     const row = {
       id, user_id: userId,
+      author: info.username, // who wrote this chat (user_id says exactly which account; this says who they are, readable in the Table Editor)
       username: info.username, email: info.email, phone: info.phone,
       title, history,
       created_at: now, updated_at: now,
@@ -62,10 +65,15 @@ app.post("/chats", async (req, res) => {
 
     let { error } = await supabaseAdmin.from("chats").upsert(row);
     if (error && /column|schema cache/i.test(error.message)) {
-      // The new columns aren't there yet (supabase/chats.sql hasn't been run). Keep chats
-      // working with the old columns, and say so loudly in the logs.
-      console.warn("WARNING: chats table is missing username/email/phone/updated_at. Run supabase/chats.sql in the Supabase SQL editor. Saving without them for now.");
-      ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
+      // A column isn't there yet (supabase/schema.sql hasn't been run). Keep chats working with what the table has, and say so
+      // loudly in the logs. First without just the author, then (an older table) without any of the extra columns.
+      const withoutAuthor = { ...row };
+      delete withoutAuthor.author;
+      console.warn("WARNING: the chats table is missing a column (author / username / email / phone / updated_at). Run supabase/schema.sql in the Supabase SQL editor. Saving with fewer columns for now.");
+      ({ error } = await supabaseAdmin.from("chats").upsert(withoutAuthor));
+      if (error && /column|schema cache/i.test(error.message)) {
+        ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
+      }
     }
     if (error) return fail(res, 500, MSG.generic, error);
     res.json({ success: true });
@@ -82,10 +90,10 @@ app.get("/chats", async (req, res) => {
   const locked = new Set(lockedChatIds(user));
   const withLock = rows => (rows || []).map(c => ({ ...c, title_locked: locked.has(c.id) }));
   const { data, error } = await supabaseAdmin.from("chats")
-    .select("id, user_id, username, email, phone, title, history, created_at")
+    .select("id, user_id, author, username, email, phone, title, history, created_at")
     .eq("user_id", userId).order("created_at", { ascending: false });
   if (error) {
-    // Older table without the new columns: fall back to select("*")
+    // Older table without the new columns (or without author): fall back to select("*")
     const legacy = await supabaseAdmin.from("chats").select("*").eq("user_id", userId).order("created_at", { ascending: false });
     if (legacy.error) return fail(res, 500, MSG.generic, legacy.error);
     return res.json({ chats: withLock(legacy.data) });

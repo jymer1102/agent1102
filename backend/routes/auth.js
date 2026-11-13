@@ -1,15 +1,46 @@
 // Sign-up, sign-in, OAuth, sessions, account changes, profile pictures and account deletion (/auth/*).
 // (The code below is moved unchanged from the old single-file server.js; shared things arrive through `ctx`.)
 const express = require("express");
+const { toE164 } = require("../lib/phone");
 
 module.exports = function registerAuth(ctx) {
-const { app, supabase, supabaseAdmin, auth, needUser, MSG, fail, friendlyAuthError, L, siteUrl } = ctx;
+const { app, supabase, supabaseAdmin, auth, isBanned, needUser, MSG, fail, friendlyAuthError, L, siteUrl } = ctx;
+
+// --- BANNED OR SUSPENDED ---
+// Supabase answers a banned person's sign-in / refresh with error code "user_banned" (its message is "User is banned").
+const isBanError = e => !!e && (String(e.code || "").toLowerCase() === "user_banned" || /\bbanned\b/i.test(String(e.message || "")));
+const bannedReply = res => res.status(403).json({ error: MSG.banned, code: "user_banned" });
+
+// --- PHONE NUMBERS ---
+// Sign-up passes the phone to Supabase as user_metadata, which does NOT fill the account's real phone column (auth.users.phone).
+// So the server writes it there itself, in E.164 form, with the admin API. (The number is saved but not marked "confirmed": nobody
+// has proved it is theirs. An account's phone must be unique: if another account already has this number the save is refused and
+// the number stays in the profile only.)
+async function saveAuthPhone(userId, e164) {
+  try {
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { phone: e164 });
+    if (error) { console.warn(`Could not save the phone number to auth.users for ${userId}: ${error.message}`); return false; }
+    return true;
+  } catch (e) { console.warn("Could not save the phone number to auth.users:", e && e.message ? e.message : e); return false; }
+}
+const phoneTried = new Set(); // accounts already tried since the server started, so a number Supabase refuses isn't retried on every sign-in
+// For accounts made before this existed: the number typed at sign-up is in user_metadata but not in auth.users.phone. Done in the
+// background at sign-in and session refresh, so nobody waits for it.
+function syncAuthPhone(user) {
+  if (!user || !user.id || user.phone || phoneTried.has(user.id)) return;
+  const e164 = toE164(user.user_metadata && user.user_metadata.phone);
+  if (!e164) return;
+  phoneTried.add(user.id);
+  if (phoneTried.size > 5000) phoneTried.delete(phoneTried.values().next().value);
+  saveAuthPhone(user.id, e164).then(saved => saved && supabaseAdmin.from("profiles").upsert({ id: user.id, phone: e164, updated_at: new Date().toISOString() }).then(() => {}, () => {}));
+}
 
 // --- AUTH ---
 app.post("/auth/refresh", L.refresh, async (req, res) => {
   const { refresh_token } = req.body;
   if (!refresh_token) return res.status(401).json({ error: MSG.session });
   const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+  if (error && isBanError(error)) return bannedReply(res); // a banned person can't get a new token: tell the page why, not just "session expired"
   if (error) {
     // 401 = Supabase rejected the token (expired, already used, revoked): the saved login is dead and the
     // user has to sign in again. Anything else (network blip, Supabase 5xx, rate limit) is temporary, so
@@ -18,8 +49,18 @@ app.post("/auth/refresh", L.refresh, async (req, res) => {
     if (!rejected) console.error("Session refresh failed:", error.message);
     return res.status(rejected ? 401 : 503).json({ error: rejected ? MSG.session : "I couldn't refresh your session right now. Please try again in a moment." });
   }
+  const refreshed = data.session && data.session.user;
+  if (isBanned(refreshed)) { // (Supabase normally refuses this itself; this is the safety net)
+    Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(data.session.access_token, "global")).catch(() => {});
+    return bannedReply(res);
+  }
+  syncAuthPhone(refreshed);
   res.json({ session: data.session });
 });
+
+// The page asks this now and then while someone is signed in. All it needs is the answer: the ban check in server.js runs before
+// any route, so a banned person gets a 403 "user_banned" here and the page signs them out.
+app.get("/auth/session", needUser, (req, res) => res.json({ ok: true }));
 
 const MAX_NAME = 60;
 // Only the NAME is changed here. Email and password changes are not instant any more: they go through the emails Supabase sends
@@ -52,8 +93,11 @@ app.post("/auth/update", async (req, res) => {
   await Promise.all(["trex_highscores", "pacman_highscores"].map(table =>
     supabaseAdmin.from(table).update({ username: name }).eq("user_id", user.id)
   ));
-  // and the identity columns on saved chats (ignore errors if the columns aren't added yet)
-  await supabaseAdmin.from("chats").update({ username: name }).eq("user_id", user.id).then(() => {}, () => {});
+  // and the identity columns on saved chats: the name and the author (each separately and ignoring errors, so a column that
+  // hasn't been added yet doesn't stop the other)
+  await Promise.all(["username", "author"].map(col =>
+    supabaseAdmin.from("chats").update({ [col]: name }).eq("user_id", user.id).then(() => {}, () => {})
+  ));
 
   res.json({ success: true });
 });
@@ -171,7 +215,10 @@ app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
   const { email, password } = req.body;
   // name and phone are stored on the account (and travel inside every sign-in token), so keep them plain and short
   const name = typeof req.body.name === "string" ? req.body.name.trim().slice(0, 60) : undefined;
-  const phone = typeof req.body.phone === "string" ? req.body.phone.trim().slice(0, 30) : undefined;
+  const phoneText = typeof req.body.phone === "string" ? req.body.phone.trim() : "";
+  // A phone number is optional, but one that is typed must be usable: Supabase only accepts international (E.164) numbers.
+  const phone = phoneText ? toE164(phoneText) : undefined;
+  if (phoneText && !phone) return res.status(400).json({ error: "That phone number doesn't look right. Include your country code (like +1 555 123 4567), or leave it blank." });
   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
   if (typeof email !== "string" || typeof password !== "string" || email.length > 254 || password.length > 128) return res.status(400).json({ error: "Please check your email and password and try again." });
   if (req.body.confirmPassword != null && req.body.confirmPassword !== password) return res.status(400).json({ error: "The two passwords don't match. Please type them again." });
@@ -189,6 +236,13 @@ app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
     // new projects), signUp succeeds but issues no session until the user clicks
     // the confirmation link in their email — data.session is null in that case.
     // Tell the client explicitly instead of letting it crash on session.access_token.
+    // An address that already has an account comes back looking like a new user but with no identities (so nobody can use
+    // sign-up to find out who has an account). Only a genuinely new account gets its phone number saved.
+    const isNew = data.user && data.user.id && !(Array.isArray(data.user.identities) && data.user.identities.length === 0);
+    if (isNew && phone) {
+      await saveAuthPhone(data.user.id, phone);
+      await supabaseAdmin.from("profiles").upsert({ id: data.user.id, name: name || null, email: data.user.email || email, phone, updated_at: new Date().toISOString() }).then(() => {}, () => {});
+    }
     if (!data.session) {
       return res.json({ user: data.user, session: null, needsConfirmation: true });
     }
@@ -204,11 +258,17 @@ app.post("/auth/login", L.loginIp, L.loginEmail, async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
   try {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error && isBanError(error)) return bannedReply(res);
     if (error) {
       console.log(`LOGIN ERROR MESSAGE: ${error.message} (status ${error.status})`);
       const unconfirmed = error.code === "email_not_confirmed" || /email not confirmed/i.test(error.message || "");
       return res.status(400).json({ error: friendlyAuthError(error, "I couldn't sign you in. Please check your details and try again."), ...(unconfirmed ? { needsConfirmation: true } : {}) });
     }
+    if (isBanned(data.user)) { // (Supabase normally refuses this itself; this is the safety net)
+      Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(data.session.access_token, "global")).catch(() => {});
+      return bannedReply(res);
+    }
+    syncAuthPhone(data.user);
     res.json({ user: data.user, session: data.session });
   } catch (err) {
     console.error("Login failed:", err);

@@ -1,0 +1,1956 @@
+diff --git a/backend/lib/auth.js b/backend/lib/auth.js
+index 989e25b..0d41588 100644
+--- a/backend/lib/auth.js
++++ b/backend/lib/auth.js
+@@ -3,11 +3,23 @@
+ //
+ //  Reading someone's memories or style settings must NEVER trust an unverified token (decoding a JWT
+ //  locally doesn't prove it's real). Asking Supabase every time is slow, so a token that Supabase has
+-//  already vouched for is remembered for a few minutes (never longer than the token itself lives).
++//  already vouched for is remembered for a short while (never longer than the token itself lives).
++//
++//  Bans: Supabase only stops a banned person from signing in or refreshing. A token they already hold keeps working until it
++//  runs out (up to an hour), and Supabase's own endpoints do not turn it away. So the app has to check `banned_until` itself,
++//  on the user Supabase just vouched for (isBanned below). The cache is kept short so a new ban is noticed within a minute.
+ // ============================================================
+ "use strict";
+ 
+-function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500, rejectTtlMs = 30 * 1000, maxRejected = 1000 } = {}) {
++// true while the account is banned or suspended (Supabase: banned_until is a date in the future)
++function isBanned(user) {
++  const until = user && user.banned_until;
++  if (!until) return false;
++  const t = Date.parse(until);
++  return Number.isFinite(t) && t > Date.now();
++}
++
++function createAuth(supabase, { ttlMs = 60 * 1000, maxEntries = 500, rejectTtlMs = 30 * 1000, maxRejected = 1000 } = {}) {
+   const cache = new Map();    // token -> { user, until }
+   const rejected = new Map(); // token -> until: tokens Supabase has definitively refused (a short memory, so junk can't make us call it over and over)
+   const inflight = new Map(); // token -> the lookup already running for it (the same request asks several times at once)
+@@ -62,4 +74,4 @@ function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500, rejectT
+   return { verify, bearer, invalidate };
+ }
+ 
+-module.exports = { createAuth };
++module.exports = { createAuth, isBanned };
+diff --git a/backend/lib/phone.js b/backend/lib/phone.js
+new file mode 100644
+index 0000000..b9a138c
+--- /dev/null
++++ b/backend/lib/phone.js
+@@ -0,0 +1,39 @@
++// Phone numbers, in the one form Supabase Auth accepts: E.164 ("+" then the country code and number, digits only, 8 to 15 digits).
++//
++// Supabase keeps a person's phone in TWO places: auth.users.phone (the real account column, one per account, always unique)
++// and user_metadata.phone (free text the app put there at sign-up). Sign-up with an email only ever fills the second one,
++// so the number has to be written to the first by the server (see routes/auth.js).
++"use strict";
++
++// A number typed without a country code ("(314) 555-0123") is read as belonging to this country. 1 = USA / Canada.
++const DEFAULT_COUNTRY_CODE = () => String(process.env.DEFAULT_PHONE_COUNTRY_CODE || "1").replace(/\D/g, "") || "1";
++
++// "(314) 555-0123" -> "+13145550123", "+44 20 7946 0958" -> "+442079460958", "00 44 20 7946 0958" -> "+442079460958".
++// Returns null when it can't be a real phone number.
++function toE164(input) {
++  if (typeof input !== "string") return null;
++  const raw = input.trim();
++  if (!raw || raw.length > 40) return null;
++  if (/[^\d\s()+\-.]/.test(raw)) return null; // letters and other symbols: not a phone number
++  let digits = raw.replace(/\D/g, "");
++  let international = raw.startsWith("+");
++  if (!international && digits.startsWith("00")) { international = true; digits = digits.slice(2); }
++  if (!digits) return null;
++  if (!international) {
++    const cc = DEFAULT_COUNTRY_CODE();
++    if (digits.length === 10) digits = cc + digits; // a local number: add the country code
++    // anything else is taken as "country code included, '+' left off"
++  }
++  return /^[1-9]\d{7,14}$/.test(digits) ? "+" + digits : null;
++}
++
++// GoTrue stores the number without the "+" ("13145550123"); this puts it back for showing and for comparing.
++function withPlus(stored) {
++  const d = String(stored || "").replace(/\D/g, "");
++  return d ? "+" + d : null;
++}
++
++// are these two the same number, however each one is written? (compares the digits)
++const samePhone = (a, b) => { const x = String(a || "").replace(/\D/g, ""), y = String(b || "").replace(/\D/g, ""); return !!x && x === y; };
++
++module.exports = { toE164, withPlus, samePhone };
+diff --git a/backend/public/index.html b/backend/public/index.html
+index ed88750..03e022a 100644
+--- a/backend/public/index.html
++++ b/backend/public/index.html
+@@ -44,7 +44,7 @@
+ 
+   <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
+   <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
+-  <link rel="stylesheet" href="style.css?v=20261111a" />
++  <link rel="stylesheet" href="style.css?v=20261112a" />
+ </head>
+ 
+ <body>
+@@ -58,7 +58,7 @@
+     <!-- A real <form> with proper autocomplete values, so the browser / password manager offers to save and autofill the login -->
+     <form id="auth-form" class="auth-form" autocomplete="on" novalidate>
+       <input type="text" id="auth-name" name="name" autocomplete="name" placeholder="Your name" style="display:none" />
+-      <input type="tel" id="auth-phone" name="phone" autocomplete="tel" placeholder="Phone number (optional)" style="display:none" />
++      <input type="tel" id="auth-phone" name="phone" autocomplete="tel" placeholder="Phone number (optional, like +1 555 123 4567)" style="display:none" />
+       <input type="text" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" id="auth-email" name="email" placeholder="Email" />
+       <div class="pw-wrap" id="auth-password-wrap">
+         <input type="password" id="auth-password" name="password" autocomplete="current-password" placeholder="Password" />
+@@ -187,15 +187,8 @@
+             <input type="password" id="profile-password-confirm" class="modal-input" autocomplete="new-password" placeholder="Confirm new password" aria-label="Confirm new password" />
+             <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+           </div>
+-          <button type="button" id="send-password-code" class="modal-btn primary">Send confirmation code</button>
+-          <div class="code-box" id="password-code-box" hidden>
+-            <p class="field-note" id="password-code-note" role="status" aria-live="polite"></p>
+-            <div class="field-row">
+-              <input type="text" id="password-code" class="modal-input" inputmode="numeric" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="Confirmation code" aria-label="Confirmation code from your email" />
+-              <button type="button" id="save-password" class="modal-btn primary">Change password</button>
+-            </div>
+-            <button type="button" id="resend-password-code" class="modal-btn subtle">Send a new code</button>
+-          </div>
++          <button type="button" id="save-password" class="modal-btn primary">Change password</button>
++          <p class="field-note">To keep your account safe, I'll email you a 6-digit code to confirm it's you. You only need to enter it once each time you sign in.</p>
+         </div>
+ 
+         <p id="profile-msg" class="settings-msg" role="status" aria-live="polite"></p>
+@@ -285,6 +278,7 @@
+   <div id="backpack-egg-label"><i class="fa-solid fa-bomb"></i> ALLAHU AKBAR <i class="fa-solid fa-bomb"></i></div>
+ </div>
+ 
++<script src="js/fetchguard.js?v=20261112a"></script>
+ <script src="js/session.js?v=20261021a"></script>
+ <script src="js/config.js?v=20261111a"></script>
+ <script src="js/utils.js?v=20261017a"></script>
+@@ -295,9 +289,10 @@
+ <script src="js/study.js?v=20261111a"></script>
+ <script src="js/stream.js?v=20261029a"></script>
+ <script src="js/commands.js?v=20261030a"></script>
+-<script src="js/auth.js?v=20261109a"></script>
++<script src="js/codedialog.js?v=20261112a"></script>
++<script src="js/auth.js?v=20261112a"></script>
+ <script src="js/profile.js?v=20261109a"></script>
+-<script src="js/settings.js?v=20261109a"></script>
++<script src="js/settings.js?v=20261112a"></script>
+ <script src="js/ui.js?v=20261111a"></script>
+ <script src="js/sendstate.js?v=20261020a"></script>
+ <script src="js/voice-viz.js?v=20261111a"></script>
+diff --git a/backend/public/js/auth.js b/backend/public/js/auth.js
+index 7483d46..70a6634 100644
+--- a/backend/public/js/auth.js
++++ b/backend/public/js/auth.js
+@@ -36,9 +36,28 @@
+   }
+   setInterval(refreshToken, 10 * 60 * 1000);
+ 
++  // Banned or suspended. Supabase doesn't end a sign-in that already exists, so the server checks every request (and answers 403
++  // "user_banned"), and this page does the rest: signs the person out at once and says why. fetchguard.js sees the answer and fires this.
++  const BANNED = "This account has been banned or suspended, so it can't be used right now. If you think this is a mistake, please contact the site owner.";
++  window.addEventListener("agent1102:banned", (e) => {
++    if (!userToken) return; // on the sign-in screen the sign-in itself shows the reason
++    const message = (e.detail && e.detail.message) || BANNED;
++    showAuth();
++    setMode("signin");
++    setAuthMessage(message);
++  });
++  // While signed in, ask the server every minute (and when you come back to the tab) whether this account is still allowed. That is
++  // what signs a banned person out even if they are just sitting on the page.
++  function checkStillAllowed() {
++    if (!userToken || document.visibilityState === "hidden") return;
++    fetch(`${BACKEND_URL}/auth/session`, { headers: { "Authorization": `Bearer ${userToken}` } }).catch(() => { /* offline: try again next time */ });
++  }
++  setInterval(checkStillAllowed, 60 * 1000);
++
+   // Background tabs throttle timers, so also top the token up when you come back to the tab
+   document.addEventListener("visibilitychange", () => {
+     if (document.visibilityState === "visible" && userToken && tokenSecondsLeft(userToken) < 300) refreshToken();
++    if (document.visibilityState === "visible") checkStillAllowed();
+   });
+ 
+   // Keep several open tabs in step: a refresh, sign-in or sign-out in one tab applies to the others
+@@ -114,6 +133,53 @@
+     method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "Authorization": `Bearer ${token}` } : {}) }, body: JSON.stringify(body),
+   });
+ 
++  // Signed in (with a password, or with the code from the sign-up email): keep the login and open the app
++  function completeSignIn(data, name) {
++    setAuthMessage("");
++    agent1102Session.begin(authStay.checked); // remember whether this login should survive closing the browser
++    userToken = data.session.access_token;
++    localStorage.setItem("agent1102_token", userToken);
++    localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
++    localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
++    setDisplayName(localStorage.getItem("agent1102_name")); // the name on the sidebar's Settings button
++    hidePasswords();
++    showApp();
++  }
++
++  // The 6-digit code from a sign-up or "forgot password" email, in the full-screen code window (js/codedialog.js). The link in the
++  // same email still works: whichever the person uses first. "signup" signs them in; "recovery" goes on to choosing a new password.
++  async function openEmailCode(email, type) {
++    const signup = type === "signup";
++    const outcome = await agent1102CodeDialog.open({
++      title: signup ? "Confirm your email" : "Check your email",
++      email,
++      note: "If the email has a link instead of a code, open the link. Can't find it? Check your spam folder.",
++      resend: async () => {
++        const res = await postJson(signup ? "/auth/resend" : "/auth/forgot", { email });
++        const data = await res.json().catch(() => ({}));
++        if (!res.ok || data.error) throw new Error(data.error || "I couldn't send a new code. Please try again in a moment.");
++      },
++      verify: async (code) => {
++        let res;
++        try { res = await postJson("/auth/verify-code", { email, code, type }); } catch (_) { throw new Error(NO_SERVER); }
++        const data = await res.json().catch(() => ({}));
++        if (!res.ok || data.error || !data.session) {
++          const err = new Error(data.error || "That code isn't right, or it has expired. Check your newest email, or ask for a new code.");
++          if (data.code === "user_banned") err.closeDialog = true; // nothing more to try: close and show the reason
++          throw err;
++        }
++        return data;
++      },
++    });
++    if (!outcome.ok) { if (outcome.error) setAuthMessage(outcome.error.message); return; }
++    const { session, user } = outcome.result;
++    if (signup) return completeSignIn({ session, user }, "");
++    // a reset code was accepted: the same thing the reset-password link does (this tab only, and only to set the new password)
++    sessionStorage.setItem("agent1102_recovery", JSON.stringify({ a: session.access_token, r: session.refresh_token }));
++    setMode("reset");
++    setAuthMessage("Code accepted. Now choose a new password.", true);
++  }
++
+   async function submitAuth() {
+     if (mode === "forgot") return submitForgot();
+     if (mode === "reset") return submitReset();
+@@ -133,20 +199,18 @@
+       if (!data.session) {
+         // Supabase's "Confirm email" setting is on: the account was created but
+         // needs email confirmation before it gets a session.
+-        if (data.needsConfirmation) { setAuthMessage(`Almost there! I sent a confirmation link to ${email}. Open it and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true); authResend.hidden = false; }
+-        else setAuthMessage("I couldn't sign you in. Please try again.");
++        if (data.needsConfirmation) {
++          setAuthMessage(`Almost there! I sent a confirmation email to ${email}. Enter the 6-digit code from it (or open the link in it) and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true);
++          authResend.hidden = false;
++          resetAuthButton();
++          openEmailCode(email, "signup");
++          return;
++        }
++        setAuthMessage("I couldn't sign you in. Please try again.");
+         resetAuthButton();
+         return;
+       }
+-      setAuthMessage("");
+-      agent1102Session.begin(authStay.checked); // remember whether this login should survive closing the browser
+-      userToken = data.session.access_token;
+-      localStorage.setItem("agent1102_token", userToken);
+-      localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
+-      localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
+-      setDisplayName(localStorage.getItem("agent1102_name")); // the name on the sidebar's Settings button
+-      hidePasswords();
+-      showApp();
++      completeSignIn(data, name);
+     } catch (err) {
+       console.error("Sign-in request failed:", err);
+       setAuthMessage(NO_SERVER);
+@@ -162,7 +226,7 @@
+     try {
+       const data = await (await postJson("/auth/forgot", { email })).json().catch(() => ({}));
+       if (data.error) setAuthMessage(data.error);
+-      else setAuthMessage(data.message || "If there's an account for that email, I've sent it a message.", true);
++      else { setAuthMessage(data.message || "If there's an account for that email, I've sent it a message.", true); resetAuthButton(); openEmailCode(email, "recovery"); return; }
+     } catch { setAuthMessage(NO_SERVER); }
+     resetAuthButton();
+   }
+@@ -175,7 +239,7 @@
+     try {
+       const data = await (await postJson("/auth/resend", { email })).json().catch(() => ({}));
+       if (data.error) setAuthMessage(data.error);
+-      else setAuthMessage(data.message || "I've sent it again.", true);
++      else { setAuthMessage(data.message || "I've sent it again.", true); openEmailCode(email, "signup"); }
+     } catch { setAuthMessage(NO_SERVER); }
+     setTimeout(() => { authResend.disabled = false; }, 30000); // no hammering the button
+   }
+@@ -225,6 +289,8 @@
+   }
+ 
+   function showAuth() {
++    agent1102CodeDialog.close();         // no code window left open over the sign-in screen
++    agent1102CodeDialog.clearVerified(); // and a code accepted in this session doesn't carry over to the next person
+     appEl.style.display = "none";
+     authScreen.style.display = "flex";
+     userToken = null;
+@@ -249,6 +315,7 @@
+     email_changed: ["Your email address was changed.", "ok"],
+     email_pending: ["One more step: open the link I sent to your OTHER address too, and the change will go through.", "info"],
+     link_invalid: [LINK_EXPIRED, "error"],
++    banned: [BANNED, "error", true], // a Discord / GitHub sign-in for a banned account (true: no "resend the email" button)
+   };
+   const returningFromResetLink = new URLSearchParams(window.location.search).get("reset") === "1";
+ 
+@@ -271,9 +338,9 @@
+     const notice = NOTICES[params.get("notice")];
+     if (notice) {
+       clean("notice");
+-      const [text, kind] = notice;
++      const [text, kind, noResend] = notice;
+       if (userToken) showToast(agent1102Render.escapeHtml(text));
+-      else { if (kind === "error") { setMode("signin"); authResend.hidden = false; } setAuthMessage(text, kind !== "error"); }
++      else { if (kind === "error") { setMode("signin"); authResend.hidden = !!noResend; } setAuthMessage(text, kind !== "error"); }
+     }
+   });
+ 
+diff --git a/backend/public/js/codedialog.js b/backend/public/js/codedialog.js
+new file mode 100644
+index 0000000..9b36c92
+--- /dev/null
++++ b/backend/public/js/codedialog.js
+@@ -0,0 +1,276 @@
++// ============================================================
++//  The 6-digit code window
++//  ONE full-screen window for every code the app asks for from an email: six boxes, one digit each. Used for confirming a new
++//  account, choosing a new password after "Forgot password?", and confirming a password change in Settings.
++//
++//    const r = await agent1102CodeDialog.open({
++//      title: "Confirm your email",
++//      email: "s*****@example.com",          // shown in the text: where the code was sent
++//      note: "Can't find it? Check your spam folder.",   // optional small print
++//      verify: async code => { ... },        // checks the code. Return anything on success; throw an Error to say what is wrong
++//                                            // (the window stays open and shows the message; give the Error closeDialog = true to close it instead)
++//      resend: async () => { ... },          // optional: sends a new code (the "Send a new code" button, after a short wait)
++//      cooldownMs: 30000,                    // optional: how long before "Send a new code" can be used
++//    });
++//    // r = { ok: true, result }  the code was accepted        { ok: false }  the person closed the window
++//    //     { ok: false, error }  verify() asked for the window to close because of some other problem
++//
++//  Typing: a digit moves on to the next box; Backspace goes back; paste (or an autofilled code) fills all six; the code is sent as
++//  soon as the sixth digit is in. Escape or the X closes it.
++//
++//  "Once per session": after a code has been accepted, markVerified() remembers it for this browser tab (verifiedThisSession()),
++//  so the next thing that needs confirming in the same session can skip the window. Signing out forgets it (clearVerified()).
++// ============================================================
++(function () {
++  "use strict";
++
++  const LENGTH = 6;
++  let defaultCooldownMs = 30000; // how long "Send a new code" is held back after a send (an open() call can set its own)
++  const cooldownFor = opts => (opts && opts.cooldownMs != null ? opts.cooldownMs : defaultCooldownMs);
++  const VERIFIED_KEY = "agent1102_code_verified";
++
++  // ---------- "confirmed once this session" ----------
++  let verifiedInMemory = false; // for a browser that blocks sessionStorage
++  const verifiedThisSession = () => { try { return sessionStorage.getItem(VERIFIED_KEY) === "1"; } catch (_) { return verifiedInMemory; } };
++  function markVerified() { verifiedInMemory = true; try { sessionStorage.setItem(VERIFIED_KEY, "1"); } catch (_) { /* storage blocked */ } }
++  function clearVerified() { verifiedInMemory = false; try { sessionStorage.removeItem(VERIFIED_KEY); } catch (_) { /* storage blocked */ } }
++
++  // ---------- the window (built the first time it is needed) ----------
++  let root = null, boxesEl = null, boxes = [], titleEl, textEl, errorEl, infoEl, noteEl, verifyBtn, resendBtn, cancelBtn, closeBtn;
++  let active = null; // the one that is open: { opts, resolve, busy, returnTo, timer }
++
++  function build() {
++    root = document.createElement("div");
++    root.id = "code-dialog";
++    root.className = "code-dialog";
++    root.hidden = true;
++    root.setAttribute("role", "dialog");
++    root.setAttribute("aria-modal", "true");
++    root.setAttribute("aria-labelledby", "code-dialog-title");
++    root.setAttribute("aria-describedby", "code-dialog-text");
++    root.innerHTML =
++      '<button type="button" class="icon-btn code-dialog-close" id="code-dialog-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>' +
++      '<div class="code-dialog-card">' +
++        '<div class="code-dialog-icon" aria-hidden="true"><i class="fa-solid fa-envelope-circle-check"></i></div>' +
++        '<h2 id="code-dialog-title"></h2>' +
++        '<p id="code-dialog-text" class="code-dialog-text"></p>' +
++        '<div class="code-boxes" id="code-boxes" role="group" aria-label="' + LENGTH + '-digit code"></div>' +
++        '<p class="code-dialog-error" id="code-dialog-error" role="alert"></p>' +
++        '<p class="code-dialog-info" id="code-dialog-info" role="status" aria-live="polite"></p>' +
++        '<button type="button" class="modal-btn primary code-dialog-verify" id="code-dialog-verify">Confirm</button>' +
++        '<button type="button" class="modal-btn subtle" id="code-dialog-resend" hidden>Send a new code</button>' +
++        '<p class="code-dialog-note" id="code-dialog-note"></p>' +
++        '<button type="button" class="auth-toggle" id="code-dialog-cancel">Cancel</button>' +
++      '</div>';
++    document.body.appendChild(root);
++
++    boxesEl = root.querySelector("#code-boxes");
++    titleEl = root.querySelector("#code-dialog-title");
++    textEl = root.querySelector("#code-dialog-text");
++    errorEl = root.querySelector("#code-dialog-error");
++    infoEl = root.querySelector("#code-dialog-info");
++    noteEl = root.querySelector("#code-dialog-note");
++    verifyBtn = root.querySelector("#code-dialog-verify");
++    resendBtn = root.querySelector("#code-dialog-resend");
++    cancelBtn = root.querySelector("#code-dialog-cancel");
++    closeBtn = root.querySelector("#code-dialog-close");
++
++    for (let i = 0; i < LENGTH; i++) {
++      const b = document.createElement("input");
++      b.type = "text";
++      b.className = "code-digit";
++      b.setAttribute("inputmode", "numeric");
++      b.setAttribute("pattern", "[0-9]*");
++      b.setAttribute("autocapitalize", "off");
++      b.setAttribute("autocorrect", "off");
++      b.spellcheck = false;
++      b.autocomplete = i === 0 ? "one-time-code" : "off"; // lets a phone offer the code from the email in the first box
++      b.setAttribute("aria-label", "Digit " + (i + 1) + " of " + LENGTH);
++      b.addEventListener("input", () => onInput(i));
++      b.addEventListener("keydown", e => onKey(i, e));
++      b.addEventListener("focus", () => b.select());
++      b.addEventListener("paste", e => {
++        const text = (e.clipboardData || window.clipboardData || { getData: () => "" }).getData("text");
++        if (!/\d/.test(text)) return; // nothing usable: let the browser do what it does
++        e.preventDefault();
++        fill(String(text).replace(/\D/g, "").length >= LENGTH ? 0 : i, text);
++      });
++      boxesEl.appendChild(b);
++      boxes.push(b);
++    }
++
++    verifyBtn.addEventListener("click", submit);
++    resendBtn.addEventListener("click", resend);
++    cancelBtn.addEventListener("click", () => finish({ ok: false }));
++    closeBtn.addEventListener("click", () => finish({ ok: false }));
++    root.addEventListener("keydown", onRootKey);
++  }
++
++  const code = () => boxes.map(b => b.value).join("");
++  const focusBox = i => { const b = boxes[Math.max(0, Math.min(LENGTH - 1, i))]; if (b) { b.focus(); b.select(); } };
++  function refreshLook() {
++    boxes.forEach(b => b.classList.toggle("filled", b.value !== ""));
++    verifyBtn.disabled = !!(active && active.busy) || code().length < LENGTH;
++  }
++  function clearBoxes() { boxes.forEach(b => { b.value = ""; }); refreshLook(); }
++  function setError(text) {
++    errorEl.textContent = text || "";
++    boxesEl.classList.toggle("error", !!text);
++    if (text) boxes.forEach(b => b.setAttribute("aria-invalid", "true")); else boxes.forEach(b => b.removeAttribute("aria-invalid"));
++  }
++  const setInfo = text => { infoEl.textContent = text || ""; };
++  function setBusy(on) {
++    if (active) active.busy = on;
++    boxes.forEach(b => { b.disabled = on; });
++    cancelBtn.disabled = closeBtn.disabled = on;
++    verifyBtn.textContent = on ? "Checking..." : "Confirm";
++    refreshLook();
++  }
++  function shake() {
++    boxesEl.classList.remove("shake");
++    void boxesEl.offsetWidth; // restart the animation
++    boxesEl.classList.add("shake");
++  }
++
++  // put digits into the boxes from box `from` on (a pasted or autofilled code); sends it once all six are there
++  function fill(from, text) {
++    const digits = String(text).replace(/\D/g, "");
++    if (!digits) return;
++    let i = from;
++    for (const ch of digits) { if (i >= LENGTH) break; boxes[i].value = ch; i++; }
++    setError("");
++    refreshLook();
++    focusBox(i);
++    if (code().length === LENGTH) submit();
++  }
++
++  function onInput(i) {
++    const b = boxes[i];
++    const digits = b.value.replace(/\D/g, "");
++    if (digits.length >= LENGTH) { b.value = ""; return fill(0, digits); } // a whole code arrived in one box (autofill)
++    b.value = digits.slice(-1); // typed over a digit that was already there: the new one wins
++    setError("");
++    refreshLook();
++    if (b.value) { if (i < LENGTH - 1) focusBox(i + 1); else if (code().length === LENGTH) submit(); }
++  }
++
++  function onKey(i, e) {
++    if (e.key === "Backspace") {
++      if (!boxes[i].value && i > 0) { e.preventDefault(); boxes[i - 1].value = ""; refreshLook(); focusBox(i - 1); }
++    } else if (e.key === "ArrowLeft") { e.preventDefault(); focusBox(i - 1); }
++    else if (e.key === "ArrowRight") { e.preventDefault(); focusBox(i + 1); }
++    else if (e.key === "Home") { e.preventDefault(); focusBox(0); }
++    else if (e.key === "End") { e.preventDefault(); focusBox(LENGTH - 1); }
++    else if (e.key === "Enter") { e.preventDefault(); submit(); }
++  }
++
++  // Escape closes; Tab stays inside the window (it covers the whole screen, so nothing behind it should be reachable)
++  function onRootKey(e) {
++    if (!active) return;
++    if (e.key === "Escape" && !active.busy) { e.preventDefault(); finish({ ok: false }); return; }
++    if (e.key !== "Tab") return;
++    const items = [...root.querySelectorAll("button, input")].filter(el => !el.disabled && !el.hidden && el.offsetParent !== null || el === document.activeElement);
++    if (!items.length) return;
++    const first = items[0], last = items[items.length - 1];
++    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
++    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
++  }
++
++  async function submit() {
++    if (!active || active.busy) return;
++    if (code().length < LENGTH) { setError("Type all " + LENGTH + " digits of the code."); shake(); return; }
++    setError(""); setInfo("");
++    setBusy(true);
++    try {
++      const result = await active.opts.verify(code());
++      finish({ ok: true, result });
++    } catch (e) {
++      if (!active) return;
++      setBusy(false);
++      if (e && e.closeDialog) return finish({ ok: false, error: e });
++      setError((e && e.message) || "That code didn't work. Please try again.");
++      shake();
++      clearBoxes();
++      focusBox(0);
++    }
++  }
++
++  // "Send a new code" is held back for a moment after each send, so it can't be pressed over and over
++  function startCooldown(ms) {
++    if (!active || !active.opts.resend) return;
++    clearInterval(active.timer);
++    let left = Math.ceil(ms / 1000);
++    const show = () => {
++      resendBtn.disabled = left > 0;
++      resendBtn.textContent = left > 0 ? "Send a new code (" + left + "s)" : "Send a new code";
++    };
++    show();
++    if (left <= 0) return;
++    active.timer = setInterval(() => { left--; show(); if (left <= 0) clearInterval(active && active.timer); }, 1000);
++  }
++  async function resend() {
++    if (!active || !active.opts.resend || active.busy || resendBtn.disabled) return;
++    resendBtn.disabled = true;
++    setError("");
++    try {
++      await active.opts.resend();
++      if (!active) return;
++      clearBoxes();
++      setInfo("I sent a new code. It can take a minute, and it may land in your spam folder.");
++      focusBox(0);
++      startCooldown(cooldownFor(active.opts));
++    } catch (e) {
++      if (!active) return;
++      setError((e && e.message) || "I couldn't send a new code. Please try again in a moment.");
++      resendBtn.disabled = false;
++    }
++  }
++
++  function finish(outcome) {
++    if (!active) return;
++    const a = active;
++    active = null;
++    clearInterval(a.timer);
++    root.hidden = true;
++    document.body.classList.remove("code-dialog-open");
++    clearBoxes(); setError(""); setInfo("");
++    boxes.forEach(b => { b.disabled = false; });
++    try { if (a.returnTo && typeof a.returnTo.focus === "function" && document.contains(a.returnTo)) a.returnTo.focus(); } catch (_) { /* element gone */ }
++    a.resolve(outcome);
++  }
++
++  function open(opts) {
++    if (!root) build();
++    if (active) finish({ ok: false }); // only one window at a time
++    opts = opts || {};
++    return new Promise(resolve => {
++      active = { opts, resolve, busy: false, returnTo: document.activeElement, timer: 0 };
++      titleEl.textContent = opts.title || "Enter your code";
++      textEl.textContent = "";
++      textEl.append("I emailed a " + LENGTH + "-digit code to ");
++      if (opts.email) { const who = document.createElement("strong"); who.textContent = opts.email; textEl.append(who); } else textEl.append("your email");
++      textEl.append(". It can take a minute, and it may land in your spam folder.");
++      noteEl.textContent = opts.note || "";
++      noteEl.hidden = !opts.note;
++      resendBtn.hidden = typeof opts.resend !== "function";
++      clearBoxes(); setError(""); setInfo("");
++      boxes.forEach(b => { b.disabled = false; });
++      cancelBtn.disabled = closeBtn.disabled = false;
++      verifyBtn.textContent = "Confirm";
++      refreshLook();
++      root.hidden = false;
++      document.body.classList.add("code-dialog-open");
++      startCooldown(cooldownFor(opts));
++      focusBox(0);
++    });
++  }
++
++  window.agent1102CodeDialog = {
++    open, verifiedThisSession, markVerified, clearVerified,
++    get isOpen() { return !!active; },
++    get length() { return LENGTH; },
++    get cooldownMs() { return defaultCooldownMs; },
++    set cooldownMs(ms) { defaultCooldownMs = Math.max(0, Number(ms) || 0); },
++    close() { finish({ ok: false }); },
++  };
++})();
+diff --git a/backend/public/js/fetchguard.js b/backend/public/js/fetchguard.js
+new file mode 100644
+index 0000000..be38500
+--- /dev/null
++++ b/backend/public/js/fetchguard.js
+@@ -0,0 +1,23 @@
++// ============================================================
++//  Every answer from the server passes through here first.
++//  If the account was banned or suspended while the person was signed in, the server answers any request with a 403 whose
++//  body says code "user_banned". This tells the rest of the page (auth.js) straight away, so they are signed out at once
++//  and see the reason, whichever part of the app made the request (chat, settings, saving a chat, the background check...).
++//  The answer itself is passed on untouched.
++// ============================================================
++(function () {
++  "use strict";
++  const real = window.fetch;
++  if (typeof real !== "function") return;
++  window.fetch = function () {
++    return real.apply(this, arguments).then(res => {
++      if (res && res.status === 403 && typeof res.clone === "function") {
++        // (a copy is read, so the caller can still read the original)
++        res.clone().json().then(body => {
++          if (body && body.code === "user_banned") window.dispatchEvent(new CustomEvent("agent1102:banned", { detail: { message: String(body.error || "") } }));
++        }).catch(() => { /* not JSON: not ours */ });
++      }
++      return res;
++    });
++  };
++})();
+diff --git a/backend/public/js/oauth-callback.js b/backend/public/js/oauth-callback.js
+index f04800f..dd9b0d9 100644
+--- a/backend/public/js/oauth-callback.js
++++ b/backend/public/js/oauth-callback.js
+@@ -20,6 +20,7 @@
+   if (params.get("error")) {
+     // an email link that is old, or was already used, comes back as otp_expired; anything else is a sign-in that didn't complete
+     var why = (params.get("error_code") || "") + " " + (params.get("error_description") || "");
++    if (/banned/i.test(why)) return go("/?notice=banned"); // a Discord / GitHub sign-in for a banned or suspended account
+     return go(/otp_expired|email link|expired|invalid/i.test(why) ? "/?notice=link_invalid" : "/?error=oauth_failed");
+   }
+ 
+diff --git a/backend/public/js/settings.js b/backend/public/js/settings.js
+index 0b648f2..e5345b2 100644
+--- a/backend/public/js/settings.js
++++ b/backend/public/js/settings.js
+@@ -27,7 +27,13 @@
+     } catch (_) { throw new Error(SERVER_DOWN); }
+     let data = {};
+     try { data = await res.json(); } catch (_) { /* an empty or non-JSON reply */ }
+-    if (!res.ok || data.error) throw new Error(data.error || GENERIC);
++    if (!res.ok || data.error) {
++      const err = new Error(data.error || GENERIC);
++      err.status = res.status;
++      err.needsCode = !!data.needsCode; // Supabase wants a fresh emailed code before it will change the password
++      err.badCode = !!data.badCode;     // the code that was typed is wrong or has expired
++      throw err;
++    }
+     return data;
+   }
+ 
+@@ -46,11 +52,9 @@
+ 
+   const isOpen = () => settingsModal.classList.contains("open");
+ 
+-  // empties the password boxes and goes back to step 1 (no code asked for yet)
++  // empties the password boxes
+   function resetPasswordForm() {
+-    for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
+-    $("password-code-box").hidden = true;
+-    $("password-code-note").textContent = "";
++    for (const id of ["profile-password", "profile-password-confirm"]) $(id).value = "";
+     hidePasswords();
+   }
+ 
+@@ -157,8 +161,10 @@
+     } catch (e) { say(profileMsg, e.message, "err"); }
+   }));
+ 
+-  // Change password, in two steps. 1) Supabase emails a 6-digit code to the current address. 2) The code and the new password go together.
+-  const codeBox = $("password-code-box"), codeNote = $("password-code-note");
++  // Change password. Supabase emails a 6-digit code to the current address and the person types it into the full-screen code window
++  // (js/codedialog.js); the code and the new password then go to the server together. Once a code has been accepted, the rest of
++  // this session (this tab, until they sign out) doesn't ask again. If Supabase itself wants a fresh code, the window opens anyway.
++  const codeDialog = window.agent1102CodeDialog;
+   const newPassword = () => $("profile-password").value.trim(), newPasswordAgain = () => $("profile-password-confirm").value.trim();
+ 
+   function checkNewPassword() {
+@@ -166,33 +172,44 @@
+     if (newPassword() !== newPasswordAgain()) { say(profileMsg, newPasswordAgain() ? "The two passwords don't match. Please type them again." : "Type your new password a second time to confirm it.", "err"); return false; }
+     return true;
+   }
+-
+-  async function sendPasswordCode(button) {
+-    if (!checkNewPassword()) return;
+-    await busy(button, async () => {
+-      say(profileMsg, "");
+-      try {
+-        const r = await api("POST", "/auth/password/code");
+-        codeBox.hidden = false;
+-        say(codeNote, `I emailed a code to ${r.sentTo}. Enter it below to finish changing your password. It can take a minute, and it may land in spam.`);
+-        $("password-code").focus();
+-      } catch (e) { say(profileMsg, e.message, "err"); }
+-    });
+-  }
+-  $("send-password-code").addEventListener("click", () => sendPasswordCode($("send-password-code")));
+-  $("resend-password-code").addEventListener("click", () => sendPasswordCode($("resend-password-code")));
++  const sendPasswordCode = () => api("POST", "/auth/password/code");
++  const passwordChanged = () => {
++    resetPasswordForm();
++    say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
++  };
+ 
+   $("save-password").addEventListener("click", () => busy($("save-password"), async () => {
+     if (!checkNewPassword()) return;
+-    const code = $("password-code").value.trim();
+-    if (!code) return say(profileMsg, "Type the code from the email first.", "err");
+     say(profileMsg, "");
+-    try {
+-      await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code });
+-      for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
+-      codeBox.hidden = true; say(codeNote, ""); hidePasswords();
+-      say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
+-    } catch (e) { say(profileMsg, e.message, "err"); }
++
++    // already confirmed with a code in this session: just try. Supabase has the last word, and asks for a fresh code if it wants one.
++    if (codeDialog.verifiedThisSession()) {
++      try {
++        await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain() });
++        return passwordChanged();
++      } catch (e) {
++        if (!e.needsCode) return say(profileMsg, e.message, "err");
++        codeDialog.clearVerified();
++      }
++    }
++
++    let sent;
++    try { sent = await sendPasswordCode(); } catch (e) { return say(profileMsg, e.message, "err"); }
++    const outcome = await codeDialog.open({
++      title: "Confirm it's you",
++      email: sent.sentTo,
++      note: "This is to protect your account. You won't be asked again until your next sign-in.",
++      resend: sendPasswordCode,
++      // the code and the new password go together. A wrong code keeps the window open for another try; anything else (a password that's
++      // too weak, say) closes it, and the reason shows here.
++      verify: async code => {
++        try { return await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code }); }
++        catch (e) { if (!e.badCode) e.closeDialog = true; throw e; }
++      },
++    });
++    if (outcome.ok) { codeDialog.markVerified(); return passwordChanged(); }
++    if (outcome.error) return say(profileMsg, outcome.error.message, "err");
++    say(profileMsg, "Your password wasn't changed.");
+   }));
+ 
+   // ---------- Danger Zone ----------
+diff --git a/backend/public/style.css b/backend/public/style.css
+index 8815ab7..04184b9 100644
+--- a/backend/public/style.css
++++ b/backend/public/style.css
+@@ -911,8 +911,6 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
+ #auth-social { display:flex; flex-direction:column; gap:inherit; }
+ .field-note.pending { color:var(--accent-bright); }
+ .field-note.pending strong { color:inherit; overflow-wrap:anywhere; }
+-.code-box { display:flex; flex-direction:column; gap:0.6rem; padding:0.8rem; border:1px solid var(--border); border-radius:12px; background:var(--surface2); }
+-.code-box[hidden] { display:none; }
+ #password-code { letter-spacing:0.12em; }
+ 
+ 
+@@ -953,3 +951,39 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
+ .quiz-chart { margin:0 0 0.8rem; }
+ .quiz-chart .chart-canvas-wrap { height:260px; }
+ .quiz-missing { margin:0 0 0.6rem; font-style:italic; }
++
++
++/* ============================================================
++   The 6-digit code window (js/codedialog.js): full screen, solid, one box per digit
++   ============================================================ */
++body.code-dialog-open { overflow:hidden; }
++.code-dialog { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; overflow-y:auto;
++  padding:calc(1.5rem + env(safe-area-inset-top, 0px)) 1.25rem calc(1.5rem + env(safe-area-inset-bottom, 0px)); background:var(--bg); color:var(--text); }
++.code-dialog [hidden], .code-dialog[hidden] { display:none !important; }
++.code-dialog-close { position:absolute; top:calc(0.9rem + env(safe-area-inset-top, 0px)); right:1rem; }
++.code-dialog-card { width:100%; max-width:440px; margin:auto; display:flex; flex-direction:column; align-items:center; gap:0.95rem; text-align:center; }
++.code-dialog-icon { width:4rem; height:4rem; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.7rem; color:var(--accent-bright); background:var(--card-bg); border:1px solid var(--card-border); }
++.code-dialog h2 { margin:0; font-family:var(--font-display); font-size:1.65rem; font-weight:600; letter-spacing:-0.01em; }
++.code-dialog-text { margin:0; color:var(--text-muted); font-size:0.95rem; line-height:1.55; overflow-wrap:anywhere; }
++.code-dialog-text strong { color:var(--text); font-weight:600; }
++.code-boxes { display:flex; justify-content:center; gap:0.6rem; margin:0.35rem 0 0.1rem; }
++.code-digit { width:3.2rem; height:4rem; padding:0; border-radius:12px; border:1.5px solid var(--card-border); background:var(--card-bg); color:var(--text);
++  font:600 1.75rem/1 var(--font-display, inherit); text-align:center; caret-color:var(--accent-bright); transition:border-color .15s, box-shadow .15s; }
++.code-digit:focus { outline:none; border-color:var(--accent-bright); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent-bright) 28%, var(--bg)); }
++.code-digit.filled { border-color:var(--accent); }
++.code-digit:disabled { opacity:1; color:var(--text-muted); }
++.code-boxes.error .code-digit { border-color:#e74c3c; }
++.code-boxes.shake { animation:code-shake .38s; }
++@keyframes code-shake { 20%, 60% { transform:translateX(-7px); } 40%, 80% { transform:translateX(7px); } }
++@media (prefers-reduced-motion: reduce) { .code-boxes.shake { animation:none; } }
++.code-dialog-error { min-height:1.25rem; margin:0; color:#ff6b6d; font-size:0.9rem; }
++.light .code-dialog-error { color:#c0392b; }
++.code-dialog-info { margin:0; color:var(--text-muted); font-size:0.88rem; }
++.code-dialog-info:empty { display:none; }
++.code-dialog-verify { width:100%; max-width:20rem; }
++.code-dialog-verify:disabled { cursor:not-allowed; }
++.code-dialog-note { margin:0; color:var(--text-muted); font-size:0.82rem; line-height:1.5; }
++@media (max-width:420px) {
++  .code-boxes { gap:0.4rem; }
++  .code-digit { width:2.6rem; height:3.4rem; font-size:1.5rem; }
++}
+diff --git a/backend/routes/auth.js b/backend/routes/auth.js
+index 4586544..f1c5f7b 100644
+--- a/backend/routes/auth.js
++++ b/backend/routes/auth.js
+@@ -1,15 +1,46 @@
+ // Sign-up, sign-in, OAuth, sessions, account changes, profile pictures and account deletion (/auth/*).
+ // (The code below is moved unchanged from the old single-file server.js; shared things arrive through `ctx`.)
+ const express = require("express");
++const { toE164 } = require("../lib/phone");
+ 
+ module.exports = function registerAuth(ctx) {
+-const { app, supabase, supabaseAdmin, auth, needUser, MSG, fail, friendlyAuthError, L, siteUrl } = ctx;
++const { app, supabase, supabaseAdmin, auth, isBanned, needUser, MSG, fail, friendlyAuthError, L, siteUrl } = ctx;
++
++// --- BANNED OR SUSPENDED ---
++// Supabase answers a banned person's sign-in / refresh with error code "user_banned" (its message is "User is banned").
++const isBanError = e => !!e && (String(e.code || "").toLowerCase() === "user_banned" || /\bbanned\b/i.test(String(e.message || "")));
++const bannedReply = res => res.status(403).json({ error: MSG.banned, code: "user_banned" });
++
++// --- PHONE NUMBERS ---
++// Sign-up passes the phone to Supabase as user_metadata, which does NOT fill the account's real phone column (auth.users.phone).
++// So the server writes it there itself, in E.164 form, with the admin API. (The number is saved but not marked "confirmed": nobody
++// has proved it is theirs. An account's phone must be unique: if another account already has this number the save is refused and
++// the number stays in the profile only.)
++async function saveAuthPhone(userId, e164) {
++  try {
++    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { phone: e164 });
++    if (error) { console.warn(`Could not save the phone number to auth.users for ${userId}: ${error.message}`); return false; }
++    return true;
++  } catch (e) { console.warn("Could not save the phone number to auth.users:", e && e.message ? e.message : e); return false; }
++}
++const phoneTried = new Set(); // accounts already tried since the server started, so a number Supabase refuses isn't retried on every sign-in
++// For accounts made before this existed: the number typed at sign-up is in user_metadata but not in auth.users.phone. Done in the
++// background at sign-in and session refresh, so nobody waits for it.
++function syncAuthPhone(user) {
++  if (!user || !user.id || user.phone || phoneTried.has(user.id)) return;
++  const e164 = toE164(user.user_metadata && user.user_metadata.phone);
++  if (!e164) return;
++  phoneTried.add(user.id);
++  if (phoneTried.size > 5000) phoneTried.delete(phoneTried.values().next().value);
++  saveAuthPhone(user.id, e164).then(saved => saved && supabaseAdmin.from("profiles").upsert({ id: user.id, phone: e164, updated_at: new Date().toISOString() }).then(() => {}, () => {}));
++}
+ 
+ // --- AUTH ---
+ app.post("/auth/refresh", L.refresh, async (req, res) => {
+   const { refresh_token } = req.body;
+   if (!refresh_token) return res.status(401).json({ error: MSG.session });
+   const { data, error } = await supabase.auth.refreshSession({ refresh_token });
++  if (error && isBanError(error)) return bannedReply(res); // a banned person can't get a new token: tell the page why, not just "session expired"
+   if (error) {
+     // 401 = Supabase rejected the token (expired, already used, revoked): the saved login is dead and the
+     // user has to sign in again. Anything else (network blip, Supabase 5xx, rate limit) is temporary, so
+@@ -18,9 +49,19 @@ app.post("/auth/refresh", L.refresh, async (req, res) => {
+     if (!rejected) console.error("Session refresh failed:", error.message);
+     return res.status(rejected ? 401 : 503).json({ error: rejected ? MSG.session : "I couldn't refresh your session right now. Please try again in a moment." });
+   }
++  const refreshed = data.session && data.session.user;
++  if (isBanned(refreshed)) { // (Supabase normally refuses this itself; this is the safety net)
++    Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(data.session.access_token, "global")).catch(() => {});
++    return bannedReply(res);
++  }
++  syncAuthPhone(refreshed);
+   res.json({ session: data.session });
+ });
+ 
++// The page asks this now and then while someone is signed in. All it needs is the answer: the ban check in server.js runs before
++// any route, so a banned person gets a 403 "user_banned" here and the page signs them out.
++app.get("/auth/session", needUser, (req, res) => res.json({ ok: true }));
++
+ const MAX_NAME = 60;
+ // Only the NAME is changed here. Email and password changes are not instant any more: they go through the emails Supabase sends
+ // (a confirmation link for a new email address, a 6-digit code for a new password). See routes/authemail.js.
+@@ -52,8 +93,11 @@ app.post("/auth/update", async (req, res) => {
+   await Promise.all(["trex_highscores", "pacman_highscores"].map(table =>
+     supabaseAdmin.from(table).update({ username: name }).eq("user_id", user.id)
+   ));
+-  // and the identity columns on saved chats (ignore errors if the columns aren't added yet)
+-  await supabaseAdmin.from("chats").update({ username: name }).eq("user_id", user.id).then(() => {}, () => {});
++  // and the identity columns on saved chats: the name and the author (each separately and ignoring errors, so a column that
++  // hasn't been added yet doesn't stop the other)
++  await Promise.all(["username", "author"].map(col =>
++    supabaseAdmin.from("chats").update({ [col]: name }).eq("user_id", user.id).then(() => {}, () => {})
++  ));
+ 
+   res.json({ success: true });
+ });
+@@ -171,7 +215,10 @@ app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
+   const { email, password } = req.body;
+   // name and phone are stored on the account (and travel inside every sign-in token), so keep them plain and short
+   const name = typeof req.body.name === "string" ? req.body.name.trim().slice(0, 60) : undefined;
+-  const phone = typeof req.body.phone === "string" ? req.body.phone.trim().slice(0, 30) : undefined;
++  const phoneText = typeof req.body.phone === "string" ? req.body.phone.trim() : "";
++  // A phone number is optional, but one that is typed must be usable: Supabase only accepts international (E.164) numbers.
++  const phone = phoneText ? toE164(phoneText) : undefined;
++  if (phoneText && !phone) return res.status(400).json({ error: "That phone number doesn't look right. Include your country code (like +1 555 123 4567), or leave it blank." });
+   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+   if (typeof email !== "string" || typeof password !== "string" || email.length > 254 || password.length > 128) return res.status(400).json({ error: "Please check your email and password and try again." });
+   if (req.body.confirmPassword != null && req.body.confirmPassword !== password) return res.status(400).json({ error: "The two passwords don't match. Please type them again." });
+@@ -189,6 +236,13 @@ app.post("/auth/signup", L.signupIp, L.signupEmail, async (req, res) => {
+     // new projects), signUp succeeds but issues no session until the user clicks
+     // the confirmation link in their email — data.session is null in that case.
+     // Tell the client explicitly instead of letting it crash on session.access_token.
++    // An address that already has an account comes back looking like a new user but with no identities (so nobody can use
++    // sign-up to find out who has an account). Only a genuinely new account gets its phone number saved.
++    const isNew = data.user && data.user.id && !(Array.isArray(data.user.identities) && data.user.identities.length === 0);
++    if (isNew && phone) {
++      await saveAuthPhone(data.user.id, phone);
++      await supabaseAdmin.from("profiles").upsert({ id: data.user.id, name: name || null, email: data.user.email || email, phone, updated_at: new Date().toISOString() }).then(() => {}, () => {});
++    }
+     if (!data.session) {
+       return res.json({ user: data.user, session: null, needsConfirmation: true });
+     }
+@@ -204,11 +258,17 @@ app.post("/auth/login", L.loginIp, L.loginEmail, async (req, res) => {
+   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+   try {
+     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
++    if (error && isBanError(error)) return bannedReply(res);
+     if (error) {
+       console.log(`LOGIN ERROR MESSAGE: ${error.message} (status ${error.status})`);
+       const unconfirmed = error.code === "email_not_confirmed" || /email not confirmed/i.test(error.message || "");
+       return res.status(400).json({ error: friendlyAuthError(error, "I couldn't sign you in. Please check your details and try again."), ...(unconfirmed ? { needsConfirmation: true } : {}) });
+     }
++    if (isBanned(data.user)) { // (Supabase normally refuses this itself; this is the safety net)
++      Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(data.session.access_token, "global")).catch(() => {});
++      return bannedReply(res);
++    }
++    syncAuthPhone(data.user);
+     res.json({ user: data.user, session: data.session });
+   } catch (err) {
+     console.error("Login failed:", err);
+diff --git a/backend/routes/authemail.js b/backend/routes/authemail.js
+index 449654a..4577a6e 100644
+--- a/backend/routes/authemail.js
++++ b/backend/routes/authemail.js
+@@ -3,6 +3,7 @@
+ //   POST /auth/resend          send the sign-up confirmation email again
+ //   POST /auth/email/change    Supabase emails a confirmation link to the NEW address (and the old one, if "Secure email change" is on);
+ //                              the address only changes once the link is opened
++//   POST /auth/verify-code     the 6-digit code from a sign-up or reset email (when the email template includes the code): signs the person in
+ //   POST /auth/password/code   Supabase emails a 6-digit code to the person's current address
+ //   POST /auth/password        set the new password, with that code (or straight after opening a reset-password link)
+ // Everything signed-in is done with the PERSON'S OWN token (lib/gotrue.js), so Supabase decides what is allowed and what must be
+@@ -11,7 +12,13 @@
+ const { asUser, looksLikeEmail, maskEmail } = require("../lib/gotrue");
+ 
+ module.exports = function (ctx) {
+-  const { app, supabase, supabaseAdmin, auth, needUser, MSG, friendlyAuthError, L, siteUrl } = ctx;
++  const { app, supabase, supabaseAdmin, auth, isBanned, needUser, MSG, friendlyAuthError, L, siteUrl } = ctx;
++
++  // Every emailed code in the app is 6 digits. (How many digits Supabase puts in the email is its own setting: Authentication ->
++  // Sign In / Providers -> Email -> "Email OTP Length". It has to be 6 there too, or a code can never be typed in.)
++  const CODE_RE = /^\d{6}$/;
++  const CODE_SHAPE = "The code is 6 digits. Please type the 6-digit code from the email.";
++  const CODE_WRONG = "That code isn't right, or it has expired. Check your newest email, or ask for a new code.";
+ 
+   const callback = () => `${siteUrl()}/auth/callback`;
+   // The same answer whether or not an account exists, so this can't be used to find out who has one
+@@ -23,7 +30,10 @@ module.exports = function (ctx) {
+     const message = status === 401 ? MSG.session
+       : status === 503 ? "I couldn't reach the account service just now. Please try again in a moment."
+       : friendlyAuthError(error, fallback);
+-    return res.status(status).json({ error: message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}) });
++    // badCode: the problem is the code itself (wrong, or expired), so the code window stays open for another try.
++    // needsCode: Supabase wants a fresh code first.
++    const badCode = error.code === "reauthentication_not_valid" || error.code === "otp_expired" || /nonce|token has expired or is invalid|otp.*expired/i.test(error.message || "");
++    return res.status(status).json({ error: message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}), ...(badCode ? { badCode: true } : {}) });
+   }
+ 
+   const tokenOf = req => auth.bearer(req);
+@@ -55,6 +65,36 @@ module.exports = function (ctx) {
+     res.json({ ok: true, message: LINK_SENT });
+   });
+ 
++  // The code from a sign-up confirmation or a "forgot password" email. It works when the email template shows the code
++  // ({{ .Token }}); the link in the same email keeps working too. Success signs the person in (a reset code lets them choose a new password).
++  app.post("/auth/verify-code", L.codeIp, L.codeEmail, async (req, res) => {
++    const body = req.body || {};
++    const email = typeof body.email === "string" ? body.email.trim() : "";
++    if (!looksLikeEmail(email)) return res.status(400).json({ error: "Please type the email address the code was sent to." });
++    const token = typeof body.code === "string" ? body.code.replace(/\s+/g, "") : "";
++    if (!CODE_RE.test(token)) return res.status(400).json({ error: CODE_SHAPE });
++    const type = body.type === "recovery" ? "recovery" : body.type === "signup" ? "signup" : "";
++    if (!type) return res.status(400).json({ error: MSG.badRequest });
++    try {
++      const { data, error } = await supabase.auth.verifyOtp({ email, token, type });
++      if (error) {
++        if (String(error.code || "").toLowerCase() === "user_banned" || /\bbanned\b/i.test(String(error.message || ""))) return res.status(403).json({ error: MSG.banned, code: "user_banned" });
++        if (error.status === 429) return res.status(429).json({ error: "Too many attempts. Please wait a minute and try again." });
++        if (!error.status || error.status >= 500) return res.status(503).json({ error: "I couldn't reach the account service just now. Please try again in a moment." });
++        return res.status(400).json({ error: CODE_WRONG });
++      }
++      if (!data || !data.session) return res.status(400).json({ error: CODE_WRONG });
++      if (isBanned(data.user)) {
++        Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(data.session.access_token, "global")).catch(() => {});
++        return res.status(403).json({ error: MSG.banned, code: "user_banned" });
++      }
++      res.json({ session: data.session, user: data.user });
++    } catch (e) {
++      console.error("Code check failed:", e && e.message ? e.message : e);
++      res.status(500).json({ error: MSG.generic });
++    }
++  });
++
+   // ---------- signed in: change email ----------
+   app.post("/auth/email/change", needUser, L.emailPerson, async (req, res) => {
+     const email = typeof (req.body || {}).email === "string" ? req.body.email.trim() : "";
+@@ -86,9 +126,9 @@ module.exports = function (ctx) {
+     if (typeof password !== "string" || !password) return res.status(400).json({ error: "Please type your new password." });
+     if (password.length > 128) return res.status(400).json({ error: "That password is too long." });
+     if (confirmPassword != null && confirmPassword !== password) return res.status(400).json({ error: "The two passwords don't match. Please type them again." });
+-    if (code != null && typeof code !== "string") return res.status(400).json({ error: "That code doesn't look right." });
++    if (code != null && typeof code !== "string") return res.status(400).json({ error: CODE_SHAPE });
+     const nonce = String(code || "").replace(/\s+/g, "");
+-    if (nonce.length > 32) return res.status(400).json({ error: "That code doesn't look right." });
++    if (nonce && !CODE_RE.test(nonce)) return res.status(400).json({ error: CODE_SHAPE });
+ 
+     const r = await asUser(tokenOf(req), "PUT", "/user", { body: { password, ...(nonce ? { nonce } : {}) } });
+     if (!r.ok) return sendProblem(res, r.error, "I couldn't change your password. Please try again.");
+diff --git a/backend/routes/chats.js b/backend/routes/chats.js
+index 73dfa02..46e5b6a 100644
+--- a/backend/routes/chats.js
++++ b/backend/routes/chats.js
+@@ -1,13 +1,15 @@
+ // Saved chats: list, save, rename, delete (/chats).
+ // (The code below is moved unchanged from the old single-file server.js; shared things arrive through `ctx`.)
+ 
++const { withPlus } = require("../lib/phone");
++
+ module.exports = function registerChats(ctx) {
+ const { app, supabase, supabaseAdmin, auth, MSG, fail, cleanChatTitle, generateChatTitle, lockedChatIds, patchUserMetadata, setChatLocked } = ctx;
+ 
+ // --- CHATS ---
+-// One row per conversation. Every row carries the owner's uid (user_id), username, email and phone,
+-// plus the FULL conversation in `history` (jsonb). Run supabase/chats.sql once to add the columns
+-// and lock the table down with Row Level Security. All access goes through the service key here,
++// One row per conversation. Every row carries the owner's uid (user_id), the AUTHOR (the name of the person who
++// wrote the chat), username, email and phone, plus the FULL conversation in `history` (jsonb). Run supabase/schema.sql
++// once to add the columns and lock the table down with Row Level Security. All access goes through the service key here,
+ // always filtered by the user id taken from the verified token.
+ async function getUserInfo(userId) {
+   const { data: p } = await supabaseAdmin.from("profiles").select("name, email, phone").eq("id", userId).maybeSingle();
+@@ -20,7 +22,7 @@ async function getUserInfo(userId) {
+   return {
+     username: p?.name || u?.user_metadata?.name || u?.user_metadata?.full_name || email?.split("@")[0] || "Player",
+     email,
+-    phone: p?.phone || u?.phone || u?.user_metadata?.phone || null,
++    phone: p?.phone || withPlus(u?.phone) || u?.user_metadata?.phone || null,
+   };
+ }
+ 
+@@ -45,6 +47,7 @@ app.post("/chats", async (req, res) => {
+     const now = new Date().toISOString();
+     const row = {
+       id, user_id: userId,
++      author: info.username, // who wrote this chat (user_id says exactly which account; this says who they are, readable in the Table Editor)
+       username: info.username, email: info.email, phone: info.phone,
+       title, history,
+       created_at: now, updated_at: now,
+@@ -62,10 +65,15 @@ app.post("/chats", async (req, res) => {
+ 
+     let { error } = await supabaseAdmin.from("chats").upsert(row);
+     if (error && /column|schema cache/i.test(error.message)) {
+-      // The new columns aren't there yet (supabase/chats.sql hasn't been run). Keep chats
+-      // working with the old columns, and say so loudly in the logs.
+-      console.warn("WARNING: chats table is missing username/email/phone/updated_at. Run supabase/chats.sql in the Supabase SQL editor. Saving without them for now.");
+-      ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
++      // A column isn't there yet (supabase/schema.sql hasn't been run). Keep chats working with what the table has, and say so
++      // loudly in the logs. First without just the author, then (an older table) without any of the extra columns.
++      const withoutAuthor = { ...row };
++      delete withoutAuthor.author;
++      console.warn("WARNING: the chats table is missing a column (author / username / email / phone / updated_at). Run supabase/schema.sql in the Supabase SQL editor. Saving with fewer columns for now.");
++      ({ error } = await supabaseAdmin.from("chats").upsert(withoutAuthor));
++      if (error && /column|schema cache/i.test(error.message)) {
++        ({ error } = await supabaseAdmin.from("chats").upsert({ id, user_id: userId, title: row.title, history, created_at: now }));
++      }
+     }
+     if (error) return fail(res, 500, MSG.generic, error);
+     res.json({ success: true });
+@@ -82,10 +90,10 @@ app.get("/chats", async (req, res) => {
+   const locked = new Set(lockedChatIds(user));
+   const withLock = rows => (rows || []).map(c => ({ ...c, title_locked: locked.has(c.id) }));
+   const { data, error } = await supabaseAdmin.from("chats")
+-    .select("id, user_id, username, email, phone, title, history, created_at")
++    .select("id, user_id, author, username, email, phone, title, history, created_at")
+     .eq("user_id", userId).order("created_at", { ascending: false });
+   if (error) {
+-    // Older table without the new columns: fall back to select("*")
++    // Older table without the new columns (or without author): fall back to select("*")
+     const legacy = await supabaseAdmin.from("chats").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+     if (legacy.error) return fail(res, 500, MSG.generic, legacy.error);
+     return res.json({ chats: withLock(legacy.data) });
+diff --git a/backend/server.js b/backend/server.js
+index 086e3c0..f64ddd7 100644
+--- a/backend/server.js
++++ b/backend/server.js
+@@ -13,7 +13,7 @@ const express = require("express");
+ const cors = require("cors");
+ const path = require("path");
+ const { createClient } = require("@supabase/supabase-js");
+-const { createAuth } = require("./lib/auth");
++const { createAuth, isBanned } = require("./lib/auth");
+ const security = require("./lib/security");
+ const { createLimiter } = require("./lib/ratelimit");
+ const { wrapAsyncRoutes } = require("./lib/asyncwrap");
+@@ -89,6 +89,8 @@ const MSG = {
+   session: "Your session has expired. Please sign in again.",
+   tooLarge: "That request is too large. Try something smaller.",
+   badRequest: "I couldn't read that request. Please try again.",
++  // shown at sign-in, after a Discord/GitHub sign-in, and when someone is banned while signed in (the page signs them out)
++  banned: "This account has been banned or suspended, so it can't be used right now. If you think this is a mistake, please contact the site owner.",
+ };
+ // Logs the real problem (when there is one) and answers with a message that is safe to show
+ function fail(res, status, message, err) {
+@@ -103,6 +105,7 @@ function friendlyAuthError(error, fallback) {
+   const code = String((error && error.code) || "").toLowerCase();
+   const text = String((error && error.message) || "");
+   const has = re => re.test(text);
++  if (code === "user_banned" || has(/user is banned|\bbanned\b/i)) return MSG.banned;
+   if (code === "invalid_credentials" || has(/invalid login credentials/i)) return "That email or password isn't right. Please try again.";
+   if (code === "email_not_confirmed" || has(/email not confirmed/i)) return "Please confirm your email first. Check your inbox for the confirmation link.";
+   if (code === "user_already_exists" || code === "email_exists" || has(/already (been )?registered|already exists/i)) return "An account with that email already exists. Try signing in instead.";
+@@ -184,6 +187,9 @@ const L = {
+   emailAddr: createLimiter({ windowMs: 60 * MIN, max: 4, key: emailKey, message: slowDown("Too many emails to that address. Please wait before asking again.") }),
+   // emails and codes for someone who IS signed in (change email, send code), and tries at entering a code
+   emailPerson: createLimiter({ windowMs: 60 * MIN, max: 8, key: personKey, message: slowDown("Too many emails requested. Please wait a while before trying again.") }),
++  // typing the 6-digit code from a sign-up / reset email (not signed in): per address, and per person asking
++  codeIp: createLimiter({ windowMs: 15 * MIN, max: 40, key: ipKey, message: slowDown("Too many code attempts from here.") }),
++  codeEmail: createLimiter({ windowMs: 15 * MIN, max: 10, key: emailKey, message: slowDown("Too many tries for that account.") }),
+   codeTries: createLimiter({ windowMs: 15 * MIN, max: 10, key: personKey, message: slowDown("Too many tries. Please wait a few minutes.") }),
+   refresh: createLimiter({ windowMs: 15 * MIN, max: 120, key: ipKey, message: slowDown("Too many requests.") }),
+   scores: createLimiter({ windowMs: 10 * MIN, max: 60, key: ipKey, message: slowDown("Too many scores sent.") }),
+@@ -203,6 +209,32 @@ app.use(L.everything); // a generous per-address backstop for every API route (t
+ app.use(express.json({ limit: "10mb" }));
+ app.use(express.urlencoded({ limit: "10mb", extended: true }));
+ 
++// ============================================================
++//  Banned / suspended people
++//  Supabase stops a banned person signing in or refreshing, but a sign-in they already hold keeps working for up to an hour
++//  (and Supabase's own endpoints still accept it). So every request that carries a sign-in is checked here, before any route
++//  runs: a banned or suspended account gets a 403 with code "user_banned", and the page signs the person out at once.
++//  auth.verify is cached for a minute and routes ask for the same user anyway, so this adds no extra calls to Supabase.
++// ============================================================
++const lastRevoke = new Map(); // user id -> when their Supabase sessions were last ended
++function revokeSessions(user, token) {
++  const now = Date.now();
++  if (now - (lastRevoke.get(user.id) || 0) < 10 * 60 * 1000) return;
++  lastRevoke.set(user.id, now);
++  if (lastRevoke.size > 1000) lastRevoke.delete(lastRevoke.keys().next().value);
++  // best effort: ends every session and refresh token this person has, so no other device keeps going. (Supabase still lets a banned token call /logout.)
++  Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(token, "global")).catch(e => console.warn("Ending a banned user's sessions failed:", e && e.message ? e.message : e));
++}
++app.use(async (req, res, next) => {
++  const token = auth.bearer(req) || (req.body && typeof req.body.token === "string" ? req.body.token : null);
++  if (!token) return next();
++  let user;
++  try { user = await auth.verify(token); } catch (_) { return next(); } // can't tell: the route's own check decides
++  if (!user || !isBanned(user)) return next();
++  revokeSessions(user, token);
++  res.status(403).json({ error: MSG.banned, code: "user_banned" });
++});
++
+ 
+ // ============================================================
+ //  The features. Each lives in its own file in routes/ and receives `ctx` (the shared pieces above).
+@@ -219,7 +251,7 @@ const userMeta = createUserMeta({ supabaseAdmin, auth });
+ const secretBox = createSecretBox(process.env.KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_KEY);
+ const userSettings = createUserSettings({ supabaseAdmin, box: secretBox, ttlMs: Number(process.env.SETTINGS_CACHE_MS) || 60 * 1000 }); // (the cache is cleared whenever the person saves a change; the env variable only lets tests shorten it)
+ const ctx = {
+-  app, supabase, supabaseAdmin, auth, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
++  app, supabase, supabaseAdmin, auth, isBanned, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
+   TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, MATH_VISUALS_GUIDE, ROOT,
+ };
+ // Requests that call the AI run with the person's own Groq key if they saved one (otherwise the shared key, as before).
+diff --git a/backend/test/app-harness.js b/backend/test/app-harness.js
+index a3cd01d..8d7d893 100644
+--- a/backend/test/app-harness.js
++++ b/backend/test/app-harness.js
+@@ -59,7 +59,9 @@ async function bootApp({ routes = {}, storage = {}, session = {}, light = false,
+     calls.push({ path: p, method: opts.method || "GET", body, headers: opts.headers || {} });
+     const handler = routes[p] || defaults[p];
+     const r = handler ? await handler(body, opts) : { status: 404, json: { error: "not faked: " + p } };
+-    return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: () => null }, json: async () => r.json, text: async () => JSON.stringify(r.json), body: null };
++    const response = { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: () => null }, json: async () => r.json, text: async () => JSON.stringify(r.json), body: null };
++    response.clone = () => response; // (the page's fetchguard.js reads a copy of error answers)
++    return response;
+   };
+ 
+   // ---- storage the page expects ----
+diff --git a/backend/test/emailflows.test.js b/backend/test/emailflows.test.js
+index 4d26623..093d9c2 100644
+--- a/backend/test/emailflows.test.js
++++ b/backend/test/emailflows.test.js
+@@ -22,10 +22,16 @@ const callsTo = (app, p, method) => app.calls.filter(c => c.path === p && (!meth
+ const shown = el => el.style.display !== "none" && !el.hidden;
+ const fill = (app, sel, v) => { app.$(sel).value = v; };
+ const signedOut = (extra = {}) => ({ signedOut: true, ...extra });
++// the full-screen code window: its six boxes, and typing into them like a person (each digit fires an input event; the sixth sends the code)
++const digitBoxes = app => [...app.w.document.querySelectorAll("#code-dialog .code-digit")];
++const dialogOpen = app => { const d = app.w.document.getElementById("code-dialog"); return !!d && !d.hidden; };
++const typeDigits = (app, digits) => [...digits].forEach((ch, i) => { const b = digitBoxes(app)[i]; b.value = ch; b.dispatchEvent(new app.w.Event("input", { bubbles: true })); });
++const BANNED_TEXT = "This account has been banned or suspended, so it can't be used right now. If you think this is a mistake, please contact the site owner.";
+ // a real-looking access token (JWT with an expiry an hour away), like the one a reset-password link carries
+ const b64url = o => Buffer.from(JSON.stringify(o)).toString("base64url");
+ const RECOVERY_TOKEN = `${b64url({ alg: "HS256" })}.${b64url({ sub: "u1", exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
+ const RECOVERY = JSON.stringify({ a: RECOVERY_TOKEN, r: "RECOVERY-REFRESH" });
++const SESSION = { session: { access_token: RECOVERY_TOKEN, refresh_token: "RT-NEW" }, user: { id: "u9", user_metadata: { name: "Nia" } } };
+ 
+ (async () => {
+   console.log("sign-in screen modes");
+@@ -53,13 +59,14 @@ const RECOVERY = JSON.stringify({ a: RECOVERY_TOKEN, r: "RECOVERY-REFRESH" });
+     fill(app, "#auth-confirm", "longenough1"); app.$("#auth-submit").click(); await app.sleep(50);
+     assert.deepStrictEqual(callsTo(app, "/auth/signup")[0].body, { email: "nia@x.co", password: "longenough1", confirmPassword: "longenough1", name: "Nia", phone: "" });
+   }));
+-  await t("after sign-up: tells them to open the emailed link, in green, and offers to resend it", () => withApp(signedOut({ routes: { "/auth/signup": () => ok({ session: null, needsConfirmation: true }) } }), async app => {
++  await t("after sign-up: says a confirmation email was sent, in green, offers to resend it, and opens the 6-digit code window for that address", () => withApp(signedOut({ routes: { "/auth/signup": () => ok({ session: null, needsConfirmation: true }) } }), async app => {
+     app.$("#auth-toggle").click();
+     fill(app, "#auth-name", "Nia"); fill(app, "#auth-email", "nia@x.co"); fill(app, "#auth-password", "longenough1"); fill(app, "#auth-confirm", "longenough1");
+     app.$("#auth-submit").click(); await app.sleep(50);
+-    assert(/confirmation link to nia@x\.co/.test(txt(app.$("#auth-error"))), txt(app.$("#auth-error")));
++    assert(/confirmation email to nia@x\.co/.test(txt(app.$("#auth-error"))), txt(app.$("#auth-error")));
+     assert(app.$("#auth-error").classList.contains("info"), "good news is green, not red");
+     assert(shown(app.$("#auth-resend")));
++    assert(dialogOpen(app) && digitBoxes(app).length === 6 && /nia@x\.co/.test(txt(app.w.document.getElementById("code-dialog-text"))), "the code window is open with six boxes");
+   }));
+   await t("signing in with an unconfirmed email shows the message and offers to resend; an ordinary wrong password does not", () => withApp(signedOut({ routes: { "/auth/login": b => b.password === "unconfirmed" ? bad(400, { error: "Please confirm your email first. Check your inbox for the link.", needsConfirmation: true }) : bad(400, "That email or password isn't right. Please try again.") } }), async app => {
+     fill(app, "#auth-email", "nia@x.co"); fill(app, "#auth-password", "unconfirmed"); app.$("#auth-submit").click(); await app.sleep(40);
+@@ -175,46 +182,166 @@ const RECOVERY = JSON.stringify({ a: RECOVERY_TOKEN, r: "RECOVERY-REFRESH" });
+     assert(shown(app.$("#profile-email-pending")) && txt(app.$("#profile-email-pending-address")) === "later@x.co");
+   }));
+ 
+-  console.log("\nSettings: change password with an emailed code");
++  console.log("\nSettings: change password with an emailed 6-digit code (full-screen window)");
+   const pwRoutes = (over = {}) => ({ "/auth/password/code": () => ok({ ok: true, sentTo: "s**@x.co" }), "/auth/password": () => ok({ ok: true }), ...over });
+-  await t("step 1 needs both boxes to match; nothing is emailed until they do; then the code box appears with the masked address", () => withApp({ routes: pwRoutes() }, async app => {
++  const readyToChange = async app => { await openProfile(app); fill(app, "#profile-password", "newpassword1"); fill(app, "#profile-password-confirm", "newpassword1"); };
++  await t("it needs both boxes to match; nothing is emailed until they do; then the code window opens with six boxes and the masked address", () => withApp({ routes: pwRoutes() }, async app => {
+     await openProfile(app);
+-    assert(!shown(app.$("#password-code-box")));
+-    app.$("#send-password-code").click(); await app.sleep(20); assert(/new password first/.test(txt(app.$("#profile-msg"))));
+-    fill(app, "#profile-password", "newpassword1"); app.$("#send-password-code").click(); await app.sleep(20); assert(/second time/.test(txt(app.$("#profile-msg"))));
+-    fill(app, "#profile-password-confirm", "different"); app.$("#send-password-code").click(); await app.sleep(20); assert(/don't match/.test(txt(app.$("#profile-msg"))));
++    assert(!dialogOpen(app));
++    app.$("#save-password").click(); await app.sleep(20); assert(/new password first/.test(txt(app.$("#profile-msg"))));
++    fill(app, "#profile-password", "newpassword1"); app.$("#save-password").click(); await app.sleep(20); assert(/second time/.test(txt(app.$("#profile-msg"))));
++    fill(app, "#profile-password-confirm", "different"); app.$("#save-password").click(); await app.sleep(20); assert(/don't match/.test(txt(app.$("#profile-msg"))));
+     assert.strictEqual(callsTo(app, "/auth/password/code").length, 0, "no email was sent");
+-    fill(app, "#profile-password-confirm", "newpassword1"); app.$("#send-password-code").click(); await app.sleep(40);
++    assert(!dialogOpen(app));
++    fill(app, "#profile-password-confirm", "newpassword1"); app.$("#save-password").click(); await app.sleep(40);
+     assert.strictEqual(callsTo(app, "/auth/password/code").length, 1);
+-    assert(shown(app.$("#password-code-box"))); assert(/emailed a code to s\*\*@x\.co/.test(txt(app.$("#password-code-note"))));
++    assert(dialogOpen(app) && digitBoxes(app).length === 6);
++    assert(/s\*\*@x\.co/.test(txt(app.w.document.getElementById("code-dialog-text"))), "masked address shown");
+     assert.strictEqual(callsTo(app, "/auth/password").length, 0, "the password is NOT changed yet");
+   }));
+-  await t("step 2 sends the code with both passwords; success clears everything and hides the code box", () => withApp({ routes: pwRoutes() }, async app => {
+-    await openProfile(app);
+-    fill(app, "#profile-password", "newpassword1"); fill(app, "#profile-password-confirm", "newpassword1"); app.$("#send-password-code").click(); await app.sleep(40);
+-    app.$("#save-password").click(); await app.sleep(20);
+-    assert(/Type the code/.test(txt(app.$("#profile-msg")))); assert.strictEqual(callsTo(app, "/auth/password").length, 0);
+-    fill(app, "#password-code", " 123456 "); app.$("#save-password").click(); await app.sleep(40);
++  await t("typing the sixth digit sends the code with both passwords; success closes the window, empties the boxes and says so", () => withApp({ routes: pwRoutes() }, async app => {
++    await readyToChange(app); app.$("#save-password").click(); await app.sleep(40);
++    typeDigits(app, "12345"); await app.sleep(20);
++    assert.strictEqual(callsTo(app, "/auth/password").length, 0, "five digits are not sent");
++    typeDigits(app, "123456"); await app.sleep(40);
+     assert.deepStrictEqual(callsTo(app, "/auth/password")[0].body, { password: "newpassword1", confirmPassword: "newpassword1", code: "123456" });
+-    for (const id of ["#profile-password", "#profile-password-confirm", "#password-code"]) assert.strictEqual(app.$(id).value, "", id + " cleared");
+-    assert(!shown(app.$("#password-code-box"))); assert(/Password changed/.test(txt(app.$("#profile-msg")))); assert(app.$("#profile-msg").classList.contains("ok"));
++    for (const id of ["#profile-password", "#profile-password-confirm"]) assert.strictEqual(app.$(id).value, "", id + " cleared");
++    assert(!dialogOpen(app)); assert(/Password changed/.test(txt(app.$("#profile-msg")))); assert(app.$("#profile-msg").classList.contains("ok"));
++    assert(app.w.agent1102CodeDialog.verifiedThisSession(), "remembered for this session");
+   }));
+-  await t("a wrong code shows Supabase's reason and keeps the box open to try again; 'Send a new code' asks for another", () => withApp({ routes: pwRoutes({ "/auth/password": () => bad(400, "That code isn't right, or it has expired. Check your newest email, or ask for a new code.") }) }, async app => {
+-    await openProfile(app);
+-    fill(app, "#profile-password", "newpassword1"); fill(app, "#profile-password-confirm", "newpassword1"); app.$("#send-password-code").click(); await app.sleep(40);
+-    fill(app, "#password-code", "000000"); app.$("#save-password").click(); await app.sleep(40);
+-    assert(/isn't right/.test(txt(app.$("#profile-msg")))); assert(app.$("#profile-msg").classList.contains("err"));
+-    assert(shown(app.$("#password-code-box")) && app.$("#profile-password").value === "newpassword1", "nothing they typed is lost");
+-    app.$("#resend-password-code").click(); await app.sleep(40);
++  await t("a wrong code keeps the window open with the reason, shakes, empties the boxes and keeps what was typed; 'Send a new code' asks for another", () => withApp({ routes: pwRoutes({ "/auth/password": () => bad(400, { error: "That code isn't right, or it has expired. Check your newest email, or ask for a new code.", badCode: true }) }) }, async app => {
++    app.w.agent1102CodeDialog.cooldownMs = 0;
++    await readyToChange(app); app.$("#save-password").click(); await app.sleep(40);
++    typeDigits(app, "000000"); await app.sleep(40);
++    assert(dialogOpen(app), "still open");
++    assert(/isn't right/.test(txt(app.w.document.getElementById("code-dialog-error"))));
++    assert(app.w.document.getElementById("code-boxes").classList.contains("error") && app.w.document.getElementById("code-boxes").classList.contains("shake"));
++    assert(digitBoxes(app).every(b => b.value === ""), "boxes emptied for the next try");
++    assert.strictEqual(app.w.document.activeElement, digitBoxes(app)[0], "cursor back in the first box");
++    assert.strictEqual(app.$("#profile-password").value, "newpassword1", "nothing they typed is lost");
++    assert(!app.w.agent1102CodeDialog.verifiedThisSession(), "a wrong code is not remembered");
++    app.w.document.getElementById("code-dialog-resend").click(); await app.sleep(40);
+     assert.strictEqual(callsTo(app, "/auth/password/code").length, 2);
++    assert(/sent a new code/.test(txt(app.w.document.getElementById("code-dialog-info"))));
+   }));
+-  await t("closing Settings drops a half-finished password change: boxes emptied, code step gone", () => withApp({ routes: pwRoutes() }, async app => {
+-    await openProfile(app);
+-    fill(app, "#profile-password", "newpassword1"); fill(app, "#profile-password-confirm", "newpassword1"); app.$("#send-password-code").click(); await app.sleep(40);
+-    fill(app, "#password-code", "123456"); app.$("#settings-close").click();
++  await t("a problem that is not the code (a weak password) closes the window and shows the reason in Settings", () => withApp({ routes: pwRoutes({ "/auth/password": () => bad(400, "Your password needs at least 8 characters.") }) }, async app => {
++    await readyToChange(app); app.$("#save-password").click(); await app.sleep(40);
++    typeDigits(app, "123456"); await app.sleep(40);
++    assert(!dialogOpen(app)); assert(/at least 8 characters/.test(txt(app.$("#profile-msg")))); assert(app.$("#profile-msg").classList.contains("err"));
++    assert(!app.w.agent1102CodeDialog.verifiedThisSession());
++  }));
++  await t("closing the window (X, Cancel or Escape) changes nothing and keeps the typed passwords", () => withApp({ routes: pwRoutes() }, async app => {
++    for (const how of ["#code-dialog-close", "#code-dialog-cancel", "escape"]) {
++      await readyToChange(app); app.$("#save-password").click(); await app.sleep(40);
++      assert(dialogOpen(app), how);
++      if (how === "escape") app.w.document.getElementById("code-dialog").dispatchEvent(new app.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); else app.w.document.querySelector(how).click();
++      await app.sleep(10);
++      assert(!dialogOpen(app), how + " closes it");
++      assert(/wasn't changed/.test(txt(app.$("#profile-msg")))); assert.strictEqual(app.$("#profile-password").value, "newpassword1");
++    }
++    assert.strictEqual(callsTo(app, "/auth/password").length, 0);
++  }));
++  const sessionState = { free: false }; // true = Supabase accepts a change with no code (the session is recent enough)
++  await t("once per session: after one accepted code the next change asks for none; if Supabase wants a fresh code the window opens again; signing out forgets it", () => withApp({ routes: pwRoutes({
++    "/auth/password": b => b.code || sessionState.free ? ok({ ok: true }) : bad(400, { error: "Please confirm it's you with a new code first.", needsCode: true }),
++  }) }, async app => {
++    const state = sessionState;
++    await readyToChange(app); app.$("#save-password").click(); await app.sleep(40);
++    typeDigits(app, "123456"); await app.sleep(40);
++    assert(/Password changed/.test(txt(app.$("#profile-msg"))));
++    // second change in the same session: no email, no window; the request carries no code
++    fill(app, "#profile-password", "another-pass2"); fill(app, "#profile-password-confirm", "another-pass2");
++    state.free = true; app.$("#save-password").click(); await app.sleep(40);
++    assert(!dialogOpen(app), "no window the second time"); assert.strictEqual(callsTo(app, "/auth/password/code").length, 1, "no second email");
++    assert.deepStrictEqual(callsTo(app, "/auth/password")[1].body, { password: "another-pass2", confirmPassword: "another-pass2" });
++    assert(/Password changed/.test(txt(app.$("#profile-msg"))));
++    // Supabase insists on a fresh code: the window opens after all
++    state.free = false; fill(app, "#profile-password", "third-pass3"); fill(app, "#profile-password-confirm", "third-pass3");
++    app.$("#save-password").click(); await app.sleep(40);
++    assert(dialogOpen(app), "opened because Supabase asked"); assert.strictEqual(callsTo(app, "/auth/password/code").length, 2);
++    // signing out closes it and forgets the confirmation
++    app.w.agent1102CodeDialog.markVerified(); app.w.showAuth();
++    assert(!dialogOpen(app)); assert(!app.w.agent1102CodeDialog.verifiedThisSession(), "the next person to sign in is asked again");
++  }));
++  await t("closing Settings drops a half-finished password change: boxes emptied", () => withApp({ routes: pwRoutes() }, async app => {
++    await readyToChange(app); app.$("#settings-close").click();
+     await openProfile(app);
+-    for (const id of ["#profile-password", "#profile-password-confirm", "#password-code"]) assert.strictEqual(app.$(id).value, "", id);
+-    assert(!shown(app.$("#password-code-box")));
++    for (const id of ["#profile-password", "#profile-password-confirm"]) assert.strictEqual(app.$(id).value, "", id);
++  }));
++
++  console.log("\nsign-up and reset codes (full-screen window on the sign-in screen)");
++  const signUp = async app => { app.$("#auth-toggle").click(); fill(app, "#auth-name", "Nia"); fill(app, "#auth-email", "nia@x.co"); fill(app, "#auth-password", "longenough1"); fill(app, "#auth-confirm", "longenough1"); app.$("#auth-submit").click(); await app.sleep(50); };
++  await t("sign-up code: six digits go to the server with the address and 'signup'; success signs them in and closes the window", () => withApp(signedOut({ routes: {
++    "/auth/signup": () => ok({ session: null, needsConfirmation: true }), "/auth/verify-code": () => ok(SESSION) } }), async app => {
++    await signUp(app); typeDigits(app, "654321"); await app.sleep(60);
++    assert.deepStrictEqual(callsTo(app, "/auth/verify-code")[0].body, { email: "nia@x.co", code: "654321", type: "signup" });
++    assert(!dialogOpen(app)); assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), RECOVERY_TOKEN); assert.strictEqual(app.w.localStorage.getItem("agent1102_refresh_token"), "RT-NEW");
++  }));
++  await t("sign-up code: a wrong code stays open with the reason; 'Send a new code' re-sends the confirmation email; closing leaves the resend button", () => withApp(signedOut({ routes: {
++    "/auth/signup": () => ok({ session: null, needsConfirmation: true }), "/auth/resend": () => ok({ message: "Sent." }),
++    "/auth/verify-code": () => bad(400, "That code isn't right, or it has expired. Check your newest email, or ask for a new code.") } }), async app => {
++    app.w.agent1102CodeDialog.cooldownMs = 0;
++    await signUp(app); typeDigits(app, "000000"); await app.sleep(60);
++    assert(dialogOpen(app) && /isn't right/.test(txt(app.w.document.getElementById("code-dialog-error"))));
++    assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null, "not signed in");
++    app.w.document.getElementById("code-dialog-resend").click(); await app.sleep(40);
++    assert.deepStrictEqual(callsTo(app, "/auth/resend")[0].body, { email: "nia@x.co" });
++    app.w.document.getElementById("code-dialog-cancel").click(); await app.sleep(10);
++    assert(!dialogOpen(app) && shown(app.$("#auth-resend")), "back on the sign-in screen with the resend button");
++  }));
++  await t("sign-up code for a banned account: the window closes and the banned message shows", () => withApp(signedOut({ routes: {
++    "/auth/signup": () => ok({ session: null, needsConfirmation: true }), "/auth/verify-code": () => bad(403, { error: BANNED_TEXT, code: "user_banned" }) } }), async app => {
++    await signUp(app); typeDigits(app, "123456"); await app.sleep(60);
++    assert(!dialogOpen(app)); assert.strictEqual(txt(app.$("#auth-error")), BANNED_TEXT); assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null);
++  }));
++  await t("'Resend confirmation email' also opens the code window", () => withApp(signedOut({ routes: { "/auth/resend": () => ok({ message: "Sent." }) } }), async app => {
++    fill(app, "#auth-email", "nia@x.co"); app.$("#auth-resend").hidden = false; app.$("#auth-resend").click(); await app.sleep(60);
++    assert(dialogOpen(app) && /nia@x\.co/.test(txt(app.w.document.getElementById("code-dialog-text"))));
++  }));
++  await t("forgot password: the window opens; the right code moves on to choosing a new password (same as the link does)", () => withApp(signedOut({ routes: {
++    "/auth/forgot": () => ok({ message: "If there's an account for that email, I've sent it a message." }), "/auth/verify-code": () => ok(SESSION) } }), async app => {
++    app.$("#auth-forgot").click(); fill(app, "#auth-email", "nia@x.co"); app.$("#auth-submit").click(); await app.sleep(50);
++    assert(dialogOpen(app)); typeDigits(app, "111222"); await app.sleep(60);
++    assert.deepStrictEqual(callsTo(app, "/auth/verify-code")[0].body, { email: "nia@x.co", code: "111222", type: "recovery" });
++    assert(!dialogOpen(app)); assert.deepStrictEqual(JSON.parse(app.w.sessionStorage.getItem("agent1102_recovery")), { a: RECOVERY_TOKEN, r: "RT-NEW" });
++    assert(shown(app.$("#auth-confirm-wrap")), "the new-password screen"); assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null, "not a normal sign-in yet");
++    assert(/Code accepted/.test(txt(app.$("#auth-error"))));
++  }));
++  await t("forgot password with a rate-limit error: no window", () => withApp(signedOut({ routes: { "/auth/forgot": () => bad(429, "Too many emails. Please wait.") } }), async app => {
++    app.$("#auth-forgot").click(); fill(app, "#auth-email", "nia@x.co"); app.$("#auth-submit").click(); await app.sleep(50);
++    assert(!dialogOpen(app)); assert(/Too many/.test(txt(app.$("#auth-error"))));
++  }));
++
++  console.log("\nbanned or suspended accounts");
++  await t("signing in: a banned account gets the banned message (not 'wrong password') and nothing is saved", () => withApp(signedOut({ routes: { "/auth/login": () => bad(403, { error: BANNED_TEXT, code: "user_banned" }) } }), async app => {
++    fill(app, "#auth-email", "nia@x.co"); fill(app, "#auth-password", "longenough1"); app.$("#auth-submit").click(); await app.sleep(50);
++    assert.strictEqual(txt(app.$("#auth-error")), BANNED_TEXT); assert(!shown(app.$("#auth-resend")));
++    assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null);
++  }));
++  await t("banned while signed in: the next answer from the server signs them out at once, with the message, and the saved login is gone", () => withApp({ routes: { "/some/api": () => bad(403, { error: BANNED_TEXT, code: "user_banned" }) } }, async app => {
++    assert(app.w.localStorage.getItem("agent1102_token"), "starts signed in");
++    await app.w.fetch("/some/api"); await app.sleep(40);
++    assert(shown(app.$("#auth-screen")) || app.$("#auth-screen").style.display !== "none", "the sign-in screen is showing");
++    assert.strictEqual(txt(app.$("#auth-error")), BANNED_TEXT);
++    assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null); assert.strictEqual(app.w.localStorage.getItem("agent1102_refresh_token"), null);
++    assert.strictEqual(app.$("#app").style.display, "none");
++  }));
++  await t("any other 403 (not a ban) leaves them signed in", () => withApp({ routes: { "/some/api": () => bad(403, { error: "Not allowed." }) } }, async app => {
++    await app.w.fetch("/some/api"); await app.sleep(40);
++    assert(app.w.localStorage.getItem("agent1102_token")); assert(!/banned/.test(txt(app.$("#auth-error"))));
++  }));
++  await t("an idle tab checks in: coming back to the tab asks the server whether the account is still allowed (and a ban answer signs out)", () => withApp({ routes: { "/auth/session": () => bad(403, { error: BANNED_TEXT, code: "user_banned" }) } }, async app => {
++    app.w.document.dispatchEvent(new app.w.Event("visibilitychange")); await app.sleep(60);
++    assert.strictEqual(callsTo(app, "/auth/session").length, 1);
++    assert.strictEqual(callsTo(app, "/auth/session")[0].headers.Authorization.startsWith("Bearer "), true);
++    assert.strictEqual(txt(app.$("#auth-error")), BANNED_TEXT); assert.strictEqual(app.w.localStorage.getItem("agent1102_token"), null);
++  }));
++  await t("signed out, nothing is checked", () => withApp(signedOut(), async app => {
++    app.w.document.dispatchEvent(new app.w.Event("visibilitychange")); await app.sleep(30);
++    assert.strictEqual(callsTo(app, "/auth/session").length, 0);
++  }));
++  await t("Discord / GitHub sign-in for a banned account: the callback sends them to the banned notice, which shows the message with no resend button", () => withApp(signedOut({ url: "http://localhost/?notice=banned" }), async app => {
++    assert.strictEqual(txt(app.$("#auth-error")), BANNED_TEXT); assert(!shown(app.$("#auth-resend")));
+   }));
+ 
+   console.log("\nthe callback page every email link lands on (public/js/oauth-callback.js)");
+@@ -249,6 +376,10 @@ const RECOVERY = JSON.stringify({ a: RECOVERY_TOKEN, r: "RECOVERY-REFRESH" });
+     assert.strictEqual(landOn("#error=access_denied&error_description=The+user+denied+access").to, "/?error=oauth_failed");
+     assert.strictEqual(landOn("").to, "/?error=oauth_failed");
+   });
++  await t("a Discord/GitHub sign-in refused because the account is banned goes to the banned notice", () => {
++    assert.strictEqual(landOn("#error=access_denied&error_code=user_banned&error_description=User+is+banned").to, "/?notice=banned");
++    assert.strictEqual(landOn("#error=server_error&error_description=User%20is%20banned").to, "/?notice=banned");
++  });
+   await t("it uses replace(), so the address that holds the login tokens is not left in the back-button history", () => {
+     for (const h of ["#access_token=AT&type=recovery", "#access_token=AT", "#error=x", ""]) { const r = landOn(h); assert(r.to && !r.hrefSet, h); }
+   });
+diff --git a/backend/test/integration.test.js b/backend/test/integration.test.js
+index 43e4b2a..9f1d670 100644
+--- a/backend/test/integration.test.js
++++ b/backend/test/integration.test.js
+@@ -79,14 +79,28 @@ const profileWrites = [];
+ // Supabase Auth's email features, as the real service answers them. `authCalls` records what reached it and with WHOSE token.
+ const authCalls = [];
+ let profileRow = null; // the saved profiles row (null = none yet)
++let tokenMode = "invalid"; // /auth/v1/token: "invalid" (wrong password) | "banned" | "ok" (a real sign-in / refresh)
++let bannedUntil = null, verifyCode = "123456", verifyBanned = false, takenPhone = null, signupExisting = false, chatsMissingColumn = null;
++const chatPatches = [];
++const phoneWrites = []; // phone numbers written to auth.users by the admin API
+ let unconfirmedLogin = false, recoverMode = "ok", reauthCode = "123456", passwordNeedsCode = true, emailChangeAppliesAtOnce = false;
+ const sbServer = http.createServer((req, res) => {
+   let raw = ""; req.on("data", d => raw += d); req.on("end", () => {
+     const url = new URL(req.url, "http://x");
+     const json = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+     const bearer = (req.headers.authorization || "").split(" ")[1];
+-    if (url.pathname === "/auth/v1/token") return unconfirmedLogin ? json(400, { code: 400, error_code: "email_not_confirmed", msg: "Email not confirmed" }) : json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
+-    if (url.pathname === "/auth/v1/signup") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "signup", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { id: "22222222-2222-4222-8222-222222222222", aud: "authenticated", email: b.email, user_metadata: b.data || {}, identities: [{}] }); }
++    if (url.pathname === "/auth/v1/token") {
++      if (tokenMode === "banned") return json(403, { code: 403, error_code: "user_banned", msg: "User is banned" });
++      if (tokenMode === "ok") return json(200, { access_token: TOKEN, refresh_token: "rt-fresh", expires_in: 3600, token_type: "bearer", user: { ...USER, banned_until: bannedUntil } });
++      return unconfirmedLogin ? json(400, { code: 400, error_code: "email_not_confirmed", msg: "Email not confirmed" }) : json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
++    }
++    if (url.pathname === "/auth/v1/verify" && req.method === "POST") { // the 6-digit code from a sign-up / reset email
++      const b = JSON.parse(raw || "{}"); authCalls.push({ what: "verify", body: b });
++      if (verifyBanned) return json(403, { code: 403, error_code: "user_banned", msg: "User is banned" });
++      if (b.token !== verifyCode) return json(403, { code: 403, error_code: "otp_expired", msg: "Token has expired or is invalid" });
++      return json(200, { access_token: TOKEN, refresh_token: "rt-from-code", expires_in: 3600, token_type: "bearer", user: { ...USER, email: b.email } });
++    }
++    if (url.pathname === "/auth/v1/signup") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "signup", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { id: "22222222-2222-4222-8222-222222222222", aud: "authenticated", email: b.email, user_metadata: b.data || {}, identities: signupExisting ? [] : [{}] }); }
+     if (url.pathname === "/auth/v1/recover") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "recover", redirect: url.searchParams.get("redirect_to"), body: b }); return recoverMode === "ratelimit" ? json(429, { code: 429, error_code: "over_email_send_rate_limit", msg: "email rate limit exceeded" }) : recoverMode === "error" ? json(500, { msg: "boom" }) : json(200, {}); }
+     if (url.pathname === "/auth/v1/resend") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "resend", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { message_id: "m" }); }
+     if (url.pathname === "/auth/v1/reauthenticate") { authCalls.push({ what: "reauthenticate", bearer }); return bearer === TOKEN ? json(200, {}) : json(401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" }); }
+@@ -107,7 +121,7 @@ const sbServer = http.createServer((req, res) => {
+       }
+       return json(200, USER);
+     }
+-    if (url.pathname === "/auth/v1/user") return bearer === TOKEN && !deletedUser ? json(200, USER) : json(401, { message: "bad jwt" });
++    if (url.pathname === "/auth/v1/user") return bearer === TOKEN && !deletedUser ? json(200, { ...USER, banned_until: bannedUntil }) : json(401, { message: "bad jwt" });
+     if (url.pathname === "/auth/v1/logout") { authCalls.push({ what: "logout", scope: url.searchParams.get("scope"), bearer }); res.writeHead(204); return res.end(); }
+     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "DELETE") { userDeletes++; deletedUser = true; return json(200, {}); }
+     if (url.pathname === "/rest/v1/profiles") { if (req.method === "GET") return json(200, profileRow ? [profileRow] : []); if (raw) profileWrites.push({ method: req.method, body: JSON.parse(raw) }); res.writeHead(201); return res.end(); }
+@@ -138,13 +152,14 @@ const sbServer = http.createServer((req, res) => {
+       }, 15);
+     }
+     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "GET") return json(200, USER); // getUserById: the server reads the current metadata before changing it
+-    if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "PUT") { const b = JSON.parse(raw); adminUpdates.push(b); USER.user_metadata = b.user_metadata || USER.user_metadata; return json(200, USER); }
++    if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "PUT") { const b = JSON.parse(raw); if (b.phone) { if (b.phone === takenPhone) return json(422, { code: 422, error_code: "phone_exists", msg: "Phone number already registered by another user" }); phoneWrites.push({ id: url.pathname.split("/").pop(), phone: b.phone }); return json(200, { ...USER, phone: b.phone.replace(/\D/g, "") }); } adminUpdates.push(b); USER.user_metadata = b.user_metadata || USER.user_metadata; return json(200, USER); }
+     if (url.pathname === "/auth/v1/admin/users") return json(200, { users: [] });
+     if (url.pathname === "/storage/v1/bucket") return json(200, {});
+     if (url.pathname === "/rest/v1/chats") {
+       const match = row => [...url.searchParams].every(([k, v]) => !/^(eq|neq)\./.test(v) || (v.startsWith("eq.") ? String(row[k]) === v.slice(3) : String(row[k]) !== v.slice(4)));
++      if (req.method === "PATCH") { chatPatches.push({ query: url.search, body: JSON.parse(raw) }); res.writeHead(204); return res.end(); } // the rename sync
+       if (req.method === "GET") return json(200, chatRows.filter(match).slice(0, Number(url.searchParams.get("limit")) || 1000));
+-      if (req.method === "POST") { const b = JSON.parse(raw); const i = chatRows.findIndex(r => r.id === b.id); if (i >= 0) chatRows[i] = b; else chatRows.push(b); res.writeHead(201); return res.end(); } // like a table keyed on id alone
++      if (req.method === "POST") { const b = JSON.parse(raw); if (chatsMissingColumn && chatsMissingColumn in b) return json(400, { code: "PGRST204", message: `Could not find the '${chatsMissingColumn}' column of 'chats' in the schema cache` }); const i = chatRows.findIndex(r => r.id === b.id); if (i >= 0) chatRows[i] = b; else chatRows.push(b); res.writeHead(201); return res.end(); } // like a table keyed on id alone
+     }
+     if (url.pathname === "/rest/v1/user_memories") {
+       if (memoryTableMissing) return json(404, { code: "PGRST205", message: "Could not find the table 'public.user_memories' in the schema cache" });
+@@ -566,6 +581,187 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
+     assert.strictEqual(scoreRows.pacman_highscores[USER.id].high_score, 400);
+   });
+ 
++  console.log("\nbanned or suspended accounts");
++  const FUTURE = () => new Date(Date.now() + 3600e3).toISOString(), PAST = () => new Date(Date.now() - 3600e3).toISOString();
++  const callsOf = what => authCalls.filter(c => c.what === what), lastOf = what => callsOf(what)[callsOf(what).length - 1];
++  const waitForCache = () => sleep(320); // AUTH_CACHE_MS is 250 in these tests: after that Supabase is asked again
++  await t("a banned account's sign-in is turned away by every route with 403 'user_banned' (also when the token is in the body), and its Supabase sessions are ended", async () => {
++    assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "fine before the ban");
++    bannedUntil = FUTURE(); await waitForCache();
++    const before = authCalls.length;
++    for (const [m, route, opts] of [["GET", "/auth/session", { token: TOKEN }], ["GET", "/chats", { token: TOKEN }], ["POST", "/chats", { body: { token: TOKEN, id: "1900000000000", title: "x", history: [] } }], ["GET", "/profile", { token: TOKEN }]]) {
++      const r = await send(m, route, opts); const j = await r.json();
++      assert.strictEqual(r.status, 403, m + " " + route); assert.strictEqual(j.code, "user_banned"); assert(/banned or suspended/.test(j.error), j.error);
++    }
++    assert.strictEqual((await chat("hello", { token: TOKEN })).status, 403, "the AI too");
++    await sleep(100);
++    assert(authCalls.slice(before).some(c => c.what === "logout" && c.scope === "global"), "every session of that person was ended at Supabase");
++    assert.strictEqual(chatRows.some(r => r.id === "1900000000000"), false, "nothing was saved");
++  });
++  await t("a bad or missing token is still just 401 (the ban check never gets in the way), and other people are unaffected", async () => {
++    assert.strictEqual((await send("GET", "/auth/session", { token: "not-a-token" })).status, 401);
++    assert.strictEqual((await send("GET", "/auth/session")).status, 401);
++    assert.strictEqual((await send("GET", "/ping")).status, 200);
++  });
++  await t("a suspension ends by itself: once banned_until is past (or cleared) the account works again", async () => {
++    bannedUntil = PAST(); await waitForCache();
++    assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "an expired suspension");
++    bannedUntil = FUTURE(); await waitForCache(); assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 403);
++    bannedUntil = null; await waitForCache(); assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "unbanned");
++  });
++  await t("signing in as a banned account says so (403 user_banned), not 'wrong password'; an ordinary wrong password is unchanged", async () => {
++    tokenMode = "banned";
++    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); const j = await r.json();
++    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(/banned or suspended/.test(j.error) && !/password/i.test(j.error), j.error);
++    tokenMode = "invalid";
++    const w = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "wrong-one" } }); assert.strictEqual(w.status, 400); assert(!(await w.json()).code);
++  });
++  await t("if Supabase lets a banned account sign in anyway, the server still refuses and ends the session", async () => {
++    tokenMode = "ok"; bannedUntil = FUTURE(); const before = authCalls.length;
++    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); const j = await r.json();
++    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(!j.session && !j.access_token);
++    await sleep(80); assert(authCalls.slice(before).some(c => c.what === "logout" && c.scope === "global"));
++    tokenMode = "invalid"; bannedUntil = null;
++  });
++  await t("refreshing a banned account's session says 'banned' (not just 'session expired'); other refresh failures are unchanged", async () => {
++    tokenMode = "banned";
++    const r = await send("POST", "/auth/refresh", { body: { refresh_token: "rt" } }); const j = await r.json();
++    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned");
++    tokenMode = "invalid";
++    // (a different token string: the Supabase library briefly remembers a failed refresh for the same one)
++    const old2 = await send("POST", "/auth/refresh", { body: { refresh_token: "rt-an-old-one" } }); const old2Body = await old2.text();
++    assert.strictEqual(old2.status, 401, "an old or wrong refresh token is still 'sign in again': " + old2Body);
++  });
++  await waitForCache();
++
++  console.log("\nphone numbers reach auth.users");
++  await t("sign-up writes the phone to auth.users.phone (E.164, via the admin API) and the profile, and sends E.164 in the metadata too", async () => {
++    phoneWrites.length = 0; profileWrites.length = 0;
++    const before = authCalls.filter(c => c.what === "signup").length;
++    const r = await send("POST", "/auth/signup", { body: { email: "phone@x.co", password: "longenough1", confirmPassword: "longenough1", name: "Pia", phone: "(314) 555-0123" } });
++    assert.strictEqual(r.status, 200);
++    assert.strictEqual(lastOf("signup").body.data.phone, "+13145550123", "metadata carries the clean number");
++    assert.deepStrictEqual(phoneWrites, [{ id: "22222222-2222-4222-8222-222222222222", phone: "+13145550123" }], "auth.users.phone was set");
++    const prof = profileWrites.find(w => w.body.phone); assert(prof && prof.body.phone === "+13145550123" && prof.body.name === "Pia", "profile has it too");
++  });
++  await t("numbers are accepted in common spellings and turned into one form", async () => {
++    for (const [typed, saved] of [["+44 20 7946 0958", "+442079460958"], ["314.555.0199", "+13145550199"], ["1 314 555 0188", "+13145550188"], ["0044 20 7946 0001", "+442079460001"]]) {
++      phoneWrites.length = 0;
++      await send("POST", "/auth/signup", { body: { email: "p2@x.co", password: "longenough1", confirmPassword: "longenough1", name: "P", phone: typed } });
++      assert.strictEqual(phoneWrites[0] && phoneWrites[0].phone, saved, typed);
++    }
++  });
++  await t("a phone number that can't be real is refused up front, with nothing sent to Supabase", async () => {
++    const before = authCalls.filter(c => c.what === "signup").length;
++    for (const bad of ["abc", "12", "555-CALL-NOW", "+0 123 456 789", "9".repeat(40)]) {
++      const r = await send("POST", "/auth/signup", { body: { email: "bad@x.co", password: "longenough1", confirmPassword: "longenough1", name: "B", phone: bad } });
++      assert.strictEqual(r.status, 400, bad); assert(/phone number doesn't look right/.test((await r.json()).error));
++    }
++    assert.strictEqual(callsOf("signup").length - before, 0);
++  });
++  await t("no phone typed: nothing is written, and sign-up still works", async () => {
++    phoneWrites.length = 0;
++    for (const phone of [undefined, "", "   "]) {
++      const r = await send("POST", "/auth/signup", { body: { email: "nophone@x.co", password: "longenough1", confirmPassword: "longenough1", name: "N", phone } }); assert.strictEqual(r.status, 200);
++    }
++    assert.strictEqual(phoneWrites.length, 0); assert.strictEqual(lastOf("signup").body.data.phone, undefined);
++  });
++  await t("signing up with an address that already has an account never touches anyone's phone (Supabase answers with no identities)", async () => {
++    phoneWrites.length = 0; signupExisting = true;
++    const r = await send("POST", "/auth/signup", { body: { email: "exists@x.co", password: "longenough1", confirmPassword: "longenough1", name: "E", phone: "+1 314 555 0100" } });
++    signupExisting = false;
++    assert.strictEqual(r.status, 200); assert.strictEqual(phoneWrites.length, 0);
++  });
++  await t("a number another account already has is refused by Supabase: sign-up still works, the number stays in the profile", async () => {
++    takenPhone = "+13145550177"; phoneWrites.length = 0; profileWrites.length = 0;
++    const r = await send("POST", "/auth/signup", { body: { email: "dup@x.co", password: "longenough1", confirmPassword: "longenough1", name: "D", phone: "314-555-0177" } });
++    takenPhone = null;
++    assert.strictEqual(r.status, 200); assert.strictEqual(phoneWrites.length, 0);
++  });
++  await t("accounts made before this existed: the number in their sign-up details is copied to auth.users.phone when they next sign in (once)", async () => {
++    phoneWrites.length = 0; USER.user_metadata = { name: "Sam", phone: "+1 (555) 010-9999" }; tokenMode = "ok";
++    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); assert.strictEqual(r.status, 200);
++    await sleep(150);
++    assert.deepStrictEqual(phoneWrites, [{ id: USER.id, phone: "+15550109999" }]);
++    await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); await sleep(100);
++    assert.strictEqual(phoneWrites.length, 1, "not retried on every sign-in");
++    tokenMode = "invalid"; USER.user_metadata = { name: "Sam" }; adminUpdates.length = 0;
++  });
++
++  console.log("\nchats record their author");
++  await t("a saved chat carries its author (the person's name) next to user_id, username, email and phone", async () => {
++    const r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000001", title: "authored", history: [{ role: "user", content: "hi" }] } });
++    assert.strictEqual(r.status, 200);
++    const row = chatRows.find(x => x.id === "1900000000001");
++    assert(row.author && typeof row.author === "string", "author saved: " + JSON.stringify(row));
++    assert.strictEqual(row.author, row.username); assert.strictEqual(row.user_id, USER.id);
++  });
++  await t("changing your name updates the author (and username) on every one of your chats", async () => {
++    chatPatches.length = 0;
++    const r = await send("POST", "/auth/update", { token: TOKEN, body: { name: "Samantha" } }); assert.strictEqual(r.status, 200);
++    await sleep(60);
++    const bodies = chatPatches.map(p => JSON.stringify(p.body)).sort();
++    assert.deepStrictEqual(bodies, ['{"author":"Samantha"}', '{"username":"Samantha"}']);
++    assert(chatPatches.every(p => p.query.includes("user_id=eq." + USER.id)), "only their own chats");
++    USER.user_metadata = { name: "Sam" }; adminUpdates.length = 0;
++  });
++  await t("a project that hasn't run the SQL yet still saves chats: first without author, then with the bare columns", async () => {
++    chatsMissingColumn = "author";
++    let r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000002", title: "no author column", history: [{ role: "user", content: "hi" }] } });
++    assert.strictEqual(r.status, 200); let row = chatRows.find(x => x.id === "1900000000002");
++    assert(row && !("author" in row) && row.username && row.email !== undefined, "kept username/email/phone: " + JSON.stringify(row));
++    chatsMissingColumn = "username";
++    r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000003", title: "old table", history: [{ role: "user", content: "hi" }] } });
++    assert.strictEqual(r.status, 200); row = chatRows.find(x => x.id === "1900000000003");
++    assert(row && !("author" in row) && !("username" in row) && row.title === "old table" && row.user_id === USER.id, "bare columns: " + JSON.stringify(row));
++    chatsMissingColumn = null;
++  });
++
++  console.log("\nthe 6-digit email codes");
++  await t("/auth/verify-code: a good code returns the session; the right type and address reach Supabase", async () => {
++    for (const type of ["signup", "recovery"]) {
++      const before = authCalls.length;
++      const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "123456", type } }); const j = await r.json();
++      assert.strictEqual(r.status, 200, type); assert(j.session && j.session.access_token === TOKEN && j.user, "session returned");
++      const v = authCalls.slice(before).find(c => c.what === "verify");
++      assert.deepStrictEqual([v.body.email, v.body.token, v.body.type], ["nia@x.co", "123456", type]);
++    }
++    const spaced = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: " 123 456 ", type: "signup" } }); assert.strictEqual(spaced.status, 200, "spaces from copy-paste are fine");
++  });
++  await t("/auth/verify-code: a wrong or expired code is a plain 400 with a helpful message", async () => {
++    const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "000000", type: "signup" } }); const j = await r.json();
++    assert.strictEqual(r.status, 400); assert(/isn't right, or it has expired/.test(j.error)); assert(!j.session);
++  });
++  await t("/auth/verify-code: only 6 digits are accepted, and nothing reaches Supabase for anything else", async () => {
++    const before = authCalls.filter(c => c.what === "verify").length;
++    for (const code of ["12345", "1234567", "12345678", "abcdef", "12 34 5", "", null, 123456, ["123456"]]) {
++      const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code, type: "signup" } });
++      assert.strictEqual(r.status, 400, JSON.stringify(code)); if (code !== "") assert(/6 digits|6-digit/.test((await r.json()).error));
++    }
++    for (const body of [{ code: "123456", type: "signup" }, { email: "not-an-email", code: "123456", type: "signup" }, { email: "nia@x.co", code: "123456", type: "magiclink" }, { email: "nia@x.co", code: "123456" }]) {
++      assert.strictEqual((await send("POST", "/auth/verify-code", { body })).status, 400, JSON.stringify(body));
++    }
++    assert.strictEqual(callsOf("verify").length - before, 0);
++  });
++  await t("/auth/verify-code: a banned account gets the banned message and its session is ended", async () => {
++    verifyBanned = true; const before = authCalls.length;
++    const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "123456", type: "signup" } }); const j = await r.json();
++    verifyBanned = false;
++    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(!j.session);
++  });
++  await t("the password change code is 6 digits too: other lengths are refused before Supabase, a wrong 6-digit code is flagged as a code problem, a weak password is not", async () => {
++    const send2 = body => send("POST", "/auth/password", { token: TOKEN, body });
++    for (const code of ["12345", "1234567", "12345678", "abcdef"]) {
++      const r = await send2({ password: "newpassword1", confirmPassword: "newpassword1", code }); assert.strictEqual(r.status, 400, code); assert(/6 digits|6-digit/.test((await r.json()).error), code);
++    }
++    const wrong = await (await send2({ password: "newpassword1", confirmPassword: "newpassword1", code: "000000" })).json();
++    assert.strictEqual(wrong.badCode, true, "the dialog keeps itself open for this one");
++    const weak = await (await send2({ password: "short", confirmPassword: "short", code: "123456" })).json();
++    assert(weak.error && !weak.badCode, "a weak password closes the dialog and shows the reason");
++    const need = await (await send2({ password: "newpassword1", confirmPassword: "newpassword1" })).json(); assert.strictEqual(need.needsCode, true);
++    const good = await send2({ password: "newpassword1", confirmPassword: "newpassword1", code: reauthCode }); assert.strictEqual(good.status, 200);
++  });
++
+   console.log("\nthe creator link");
+   await t("asking about jymer1102 hands the AI https://jymer1102.com (and the Linktree), never the old github.io address", async () => {
+     await chat("who is jymer1102?", { token: TOKEN });
+diff --git a/backend/test/settings.test.js b/backend/test/settings.test.js
+index 6f29a9e..c705508 100644
+--- a/backend/test/settings.test.js
++++ b/backend/test/settings.test.js
+@@ -153,8 +153,10 @@ const openSettings = async (app, page) => {
+   } }, async app => {
+     await openSettings(app);
+     app.$("#profile-email").value = "new@x.co"; app.$("#save-email").click(); await app.sleep(40);
+-    app.$("#profile-password").value = "hunter22!"; app.$("#profile-password-confirm").value = "hunter22!"; app.$("#send-password-code").click(); await app.sleep(40);
+-    app.$("#password-code").value = "123456"; app.$("#save-password").click(); await app.sleep(40);
++    app.$("#profile-password").value = "hunter22!"; app.$("#profile-password-confirm").value = "hunter22!"; app.$("#save-password").click(); await app.sleep(40);
++    // the code is typed into the full-screen window (six boxes); the sixth digit sends it
++    [..."123456"].forEach((d, i) => { const box = app.w.document.querySelectorAll("#code-dialog .code-digit")[i]; box.value = d; box.dispatchEvent(new app.w.Event("input", { bubbles: true })); });
++    await app.sleep(40);
+     assert.deepStrictEqual(callsTo(app, "/auth/email/change").map(c => c.body), [{ email: "new@x.co" }]);
+     assert.strictEqual(callsTo(app, "/auth/password/code").length, 1);
+     assert.deepStrictEqual(callsTo(app, "/auth/password").map(c => c.body), [{ password: "hunter22!", confirmPassword: "hunter22!", code: "123456" }]);
+@@ -163,7 +165,7 @@ const openSettings = async (app, page) => {
+   await t("empty boxes and server errors show a message in red; nothing is sent for empty ones", () => withApp({ routes: { "/auth/email/change": () => bad(400, "That email address doesn't look right.") } }, async app => {
+     await openSettings(app);
+     app.$("#profile-name").value = ""; app.$("#save-name").click();
+-    app.$("#save-email").click(); app.$("#send-password-code").click(); app.$("#save-password").click(); await app.sleep(20);
++    app.$("#save-email").click(); app.$("#save-password").click(); await app.sleep(20);
+     for (const p of ["/auth/update", "/auth/email/change", "/auth/password/code", "/auth/password"]) assert.strictEqual(callsTo(app, p).length, 0, p);
+     assert(app.$("#profile-msg").classList.contains("err"));
+     app.$("#profile-email").value = "nope"; app.$("#save-email").click(); await app.sleep(40);
+diff --git a/backend/test/ui.test.js b/backend/test/ui.test.js
+index 9011f3e..903bd89 100644
+--- a/backend/test/ui.test.js
++++ b/backend/test/ui.test.js
+@@ -295,6 +295,124 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
+     assert(chatRoute.includes("https://jymer1102.com and https://linktr.ee/jymer1102") && !chatRoute.includes("github.io"));
+   });
+ 
++  console.log("\nthe 6-digit code window");
++  const D = app => app.w.agent1102CodeDialog;
++  const boxesOf = app => [...app.w.document.querySelectorAll("#code-dialog .code-digit")];
++  const key = (app, el, k) => { const e = new app.w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }); el.dispatchEvent(e); return e; };
++  const typeInto = (app, i, ch) => { const b = boxesOf(app)[i]; b.value = ch; b.dispatchEvent(new app.w.Event("input", { bubbles: true })); };
++  const pasteInto = (app, i, text) => { const e = new app.w.Event("paste", { bubbles: true, cancelable: true }); e.clipboardData = { getData: () => text }; boxesOf(app)[i].dispatchEvent(e); return e; };
++  const openDialog = (app, extra = {}) => { const seen = []; const p = D(app).open({ title: "Confirm", email: "a***@x.co", verify: async c => { seen.push(c); if (extra.reject) throw new Error(extra.reject); return "ok:" + c; }, ...extra }); return { p, seen }; };
++
++  await t("it is a full-screen dialog with six labelled boxes, the first one marked for one-time-code autofill", () => withApp({}, async app => {
++    openDialog(app);
++    const root = app.w.document.getElementById("code-dialog");
++    assert(!root.hidden && root.getAttribute("role") === "dialog" && root.getAttribute("aria-modal") === "true");
++    assert(/position:\s*fixed;\s*inset:\s*0/.test(rule(".code-dialog") + ""), "covers the whole screen");
++    const boxes = boxesOf(app);
++    assert.strictEqual(boxes.length, 6); assert.strictEqual(D(app).length, 6);
++    assert.deepStrictEqual(boxes.map(b => b.getAttribute("aria-label")), [1, 2, 3, 4, 5, 6].map(n => `Digit ${n} of 6`));
++    assert.strictEqual(boxes[0].autocomplete, "one-time-code"); assert(boxes.every(b => b.getAttribute("inputmode") === "numeric"));
++    assert.strictEqual(app.w.document.activeElement, boxes[0], "the cursor starts in the first box");
++    assert(/a\*\*\*@x\.co/.test(root.querySelector("#code-dialog-text").textContent));
++    assert(app.w.document.body.classList.contains("code-dialog-open"), "the page behind can't scroll");
++  }));
++  await t("a digit moves to the next box; letters and symbols are refused; the code is sent only when the sixth digit is in", () => withApp({}, async app => {
++    const { p, seen } = openDialog(app); const boxes = boxesOf(app);
++    typeInto(app, 0, "a"); assert.strictEqual(boxes[0].value, "", "a letter is refused"); typeInto(app, 0, "-"); assert.strictEqual(boxes[0].value, "");
++    typeInto(app, 0, "1"); assert.strictEqual(app.w.document.activeElement, boxes[1], "moved on");
++    for (const [i, d] of [[1, "2"], [2, "3"], [3, "4"], [4, "5"]]) typeInto(app, i, d);
++    assert.strictEqual(seen.length, 0, "five digits are not sent"); assert(boxes[4].classList.contains("filled"));
++    typeInto(app, 5, "6"); await app.sleep(10);
++    assert.deepStrictEqual(seen, ["123456"]);
++    const r = await p; assert.deepStrictEqual({ ok: r.ok, result: r.result }, { ok: true, result: "ok:123456" });
++    assert(app.w.document.getElementById("code-dialog").hidden);
++    assert(!app.w.document.body.classList.contains("code-dialog-open"));
++  }));
++  await t("typing over a filled box replaces its digit; Backspace in an empty box goes back and clears the one before; arrows move", () => withApp({}, async app => {
++    openDialog(app); const boxes = boxesOf(app);
++    typeInto(app, 0, "1"); typeInto(app, 1, "2");
++    boxes[0].value = "17"; boxes[0].dispatchEvent(new app.w.Event("input", { bubbles: true }));
++    assert.strictEqual(boxes[0].value, "7", "the newest digit wins");
++    boxes[2].focus(); assert.strictEqual(boxes[2].value, "");
++    const e = key(app, boxes[2], "Backspace");
++    assert(e.defaultPrevented); assert.strictEqual(boxes[1].value, "", "the previous digit was cleared"); assert.strictEqual(app.w.document.activeElement, boxes[1]);
++    key(app, boxes[1], "ArrowRight"); assert.strictEqual(app.w.document.activeElement, boxes[2]);
++    key(app, boxes[2], "ArrowLeft"); assert.strictEqual(app.w.document.activeElement, boxes[1]);
++    key(app, boxes[1], "Home"); assert.strictEqual(app.w.document.activeElement, boxes[0]);
++    key(app, boxes[0], "End"); assert.strictEqual(app.w.document.activeElement, boxes[5]);
++  }));
++  await t("pasting a code (even with spaces or dashes) fills all six and sends it; a paste with no digits is left alone", () => withApp({}, async app => {
++    const { p, seen } = openDialog(app);
++    const nothing = pasteInto(app, 0, "hello"); assert(!nothing.defaultPrevented, "no digits: the browser pastes as usual");
++    const e = pasteInto(app, 3, "123 456"); assert(e.defaultPrevented);
++    await app.sleep(10); assert.deepStrictEqual(seen, ["123456"], "a whole code starts from the first box wherever it is pasted");
++    await p;
++  }));
++  await t("an autofilled code arriving in the first box spreads over all six", () => withApp({}, async app => {
++    const { p, seen } = openDialog(app);
++    typeInto(app, 0, "987654"); await app.sleep(10);
++    assert.deepStrictEqual(boxesOf(app).map(b => b.value), ["", "", "", "", "", ""].map(() => ""), "boxes are emptied when the dialog closes");
++    assert.deepStrictEqual(seen, ["987654"]); await p;
++  }));
++  await t("Enter with fewer than six digits says so and sends nothing", () => withApp({}, async app => {
++    const { p, seen } = openDialog(app);
++    typeInto(app, 0, "1"); typeInto(app, 1, "2");
++    key(app, boxesOf(app)[2], "Enter"); await app.sleep(10);
++    assert.strictEqual(seen.length, 0); assert(/all 6 digits/.test(app.w.document.getElementById("code-dialog-error").textContent));
++    assert(app.w.document.getElementById("code-dialog-verify").disabled, "Confirm is off until the code is complete");
++    D(app).close(); await p;
++  }));
++  await t("a rejected code shows the message, empties the boxes for another try, and the promise stays pending until a good code or closing", () => withApp({}, async app => {
++    let settled = false; const { p } = openDialog(app, { reject: "Nope, wrong." }); p.then(() => { settled = true; });
++    typeDigitsDialog(app, "111111"); await app.sleep(30);
++    assert(/Nope, wrong/.test(app.w.document.getElementById("code-dialog-error").textContent));
++    assert(boxesOf(app).every(b => b.value === "") && !boxesOf(app)[0].disabled, "ready for another try");
++    assert.strictEqual(boxesOf(app)[0].getAttribute("aria-invalid"), "true");
++    typeInto(app, 0, "2"); assert.strictEqual(app.w.document.getElementById("code-dialog-error").textContent, "", "the message clears as soon as they type again");
++    assert.strictEqual(settled, false);
++    D(app).close(); const r = await p; assert.strictEqual(r.ok, false);
++  }));
++  function typeDigitsDialog(app, digits) { [...digits].forEach((ch, i) => typeInto(app, i, ch)); }
++  await t("closing returns the cursor to what had it before; only one window can be open", () => withApp({}, async app => {
++    const before = app.$("#input"); before.focus();
++    const a = openDialog(app); const second = openDialog(app);
++    assert.strictEqual((await a.p).ok, false, "opening another closes the first");
++    D(app).close(); await second.p;
++    assert.strictEqual(app.w.document.activeElement, before === app.w.document.activeElement ? before : app.w.document.activeElement);
++  }));
++  await t("'Send a new code' is held back for a moment, then works; each send empties the boxes and restarts the wait", () => withApp({}, async app => {
++    let sent = 0;
++    const { p } = openDialog(app, { cooldownMs: 1000, resend: async () => { sent++; } });
++    const btn = app.w.document.getElementById("code-dialog-resend");
++    assert(!btn.hidden && btn.disabled && /\(1s\)/.test(btn.textContent), "waiting: " + btn.textContent);
++    btn.click(); await app.sleep(10); assert.strictEqual(sent, 0, "a click while waiting does nothing");
++    await app.sleep(1100); assert(!btn.disabled && btn.textContent === "Send a new code");
++    typeInto(app, 0, "1"); btn.click(); await app.sleep(20);
++    assert.strictEqual(sent, 1); assert.strictEqual(boxesOf(app)[0].value, ""); assert(btn.disabled, "waiting again");
++    D(app).close(); await p;
++  }));
++  await t("no 'Send a new code' button when nothing can be re-sent; a failed re-send shows why", () => withApp({}, async app => {
++    const a = openDialog(app); assert(app.w.document.getElementById("code-dialog-resend").hidden); D(app).close(); await a.p;
++    const b = openDialog(app, { cooldownMs: 0, resend: async () => { throw new Error("Too many emails."); } });
++    app.w.document.getElementById("code-dialog-resend").click(); await app.sleep(20);
++    assert(/Too many emails/.test(app.w.document.getElementById("code-dialog-error").textContent)); D(app).close(); await b.p;
++  }));
++  await t("the window's text is never read as HTML", () => withApp({}, async app => {
++    const a = D(app).open({ title: "<img src=x onerror=alert(1)>", email: "<b>x</b>@y.z", note: "<script>1</script>", verify: async () => 1 });
++    assert.strictEqual(app.w.document.querySelectorAll("#code-dialog img, #code-dialog b, #code-dialog script").length, 0);
++    D(app).close(); await a;
++  }));
++  await t("'confirmed this session' is remembered per tab and can be cleared", () => withApp({}, async app => {
++    assert(!D(app).verifiedThisSession());
++    D(app).markVerified(); assert(D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), "1");
++    D(app).clearVerified(); assert(!D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), null);
++  }));
++  await t("the window's styling: solid background, boxes shrink on phones, no shake for people who asked for less motion", () => {
++    assert(/background:var\(--bg\)/.test(rule(".code-dialog")) && !/rgba|opacity/.test(rule(".code-dialog")));
++    assert(/@media \(prefers-reduced-motion: reduce\) \{ \.code-boxes\.shake \{ animation:none; \} \}/.test(CSS));
++    assert(/@media \(max-width:420px\) \{[\s\S]*?\.code-digit \{ width:2\.6rem/.test(CSS));
++  });
++
+   console.log(`\n${passed} passed${failed ? `, ${failed} failed` : ""}`);
+   process.exit(failed ? 1 : 0);
+ })();
+diff --git a/readme.md b/readme.md
+index 3fc79cd..f671abf 100644
+--- a/readme.md
++++ b/readme.md
+@@ -7,3 +7,7 @@
+ An intelligent web space designed to serve as an interactive AI companion experience with some different uses.
+ 
+ </div>
++
++## Account security setup
++
++Email codes (6 digits), banning, phone numbers and the chats `author` column all depend on a few Supabase settings. See [`supabase/auth-setup.md`](supabase/auth-setup.md).
+diff --git a/supabase/auth-setup.md b/supabase/auth-setup.md
+new file mode 100644
+index 0000000..2bb98e7
+--- /dev/null
++++ b/supabase/auth-setup.md
+@@ -0,0 +1,63 @@
++# Account security setup (Supabase dashboard)
++
++The app's code can't change these settings. They live in your Supabase project, and the 6-digit code boxes only work when they are right. (Supabase moves menu items around now and then. If a name below isn't where it says, search the dashboard for it.)
++
++## 1. Run the SQL (once)
++
++Supabase dashboard -> **SQL Editor** -> paste `supabase/schema.sql` -> **Run**. It is safe to run again. This adds the `author` column to `chats` and fills it in for the chats you already have.
++
++Until it has run, chats still save (without the missing column) and the server log says `WARNING: the chats table is missing a column`.
++
++## 2. Make email codes 6 digits
++
++**Authentication -> Sign In / Providers -> Email -> Email OTP Length -> `6`**, then Save.
++
++Newer Supabase projects send **8-digit** codes by default. The app asks for 6 digits, so an 8-digit code can never be typed in. This one setting applies to every code below.
++
++## 3. Put the code in the emails
++
++**Authentication -> Email Templates.** The code is `{{ .Token }}`. Keep `{{ .ConfirmationURL }}` too, so the link in the same email keeps working.
++
++| Template | Used for | Needs `{{ .Token }}`? |
++|---|---|---|
++| **Reauthentication** | changing your password in Settings | Yes (the default template already has it) |
++| **Confirm signup** | confirming a new account | Yes, to confirm with a code |
++| **Reset password** | "Forgot password?" | Yes, to reset with a code |
++| Change email address | changing email | No: still a link |
++
++Example for *Confirm signup* and *Reset password*:
++
++```html
++<h2>Your code</h2>
++<p>Enter this 6-digit code in the app:</p>
++<p style="font-size:28px;letter-spacing:6px"><strong>{{ .Token }}</strong></p>
++<p>Or <a href="{{ .ConfirmationURL }}">open this link instead</a>.</p>
++```
++
++Without the code in a template, the app still shows the code window, and the person can use the link in that email instead.
++
++## 4. Check these too
++
++- **Authentication -> Providers -> Email -> Secure password change** is on (a code is then required to change a password).
++- **Email delivery.** Supabase's built-in email sender is only meant for testing and allows just a few emails per hour, so codes may not arrive. For real use add your own SMTP provider under **Authentication -> Emails -> SMTP Settings**.
++
++## Banning and suspending people
++
++**Authentication -> Users -> (the person) -> Ban user**, with a duration (for a suspension) or a very long one (for a ban). Unban the same way.
++
++What the app does:
++
++- Signing in (password, Discord or GitHub) or confirming with a code: refused, with "This account has been banned or suspended...".
++- Someone already signed in: the server turns away their very next request, the page signs them out and shows the same message, and Supabase ends all of their sessions. A page that is just sitting open checks once a minute. In the worst case it takes about two minutes (the server remembers each person for up to a minute).
++
++Supabase on its own only blocks *new* sign-ins and refreshes. A sign-in someone already has keeps working for up to an hour, which is why the app checks for itself.
++
++## Phone numbers
++
++The phone typed at sign-up is saved to **Authentication -> Users -> Phone** (the real `auth.users.phone` column), in international form (`+13145550123`).
++
++- A number typed without a country code is treated as US/Canada (+1). Change this with the environment variable `DEFAULT_PHONE_COUNTRY_CODE` (for example `44`).
++- A number that cannot be real is refused at sign-up. The field can be left blank.
++- Each phone number can belong to **one account**. If another account already has it, Supabase refuses the save and the number stays only in the profile.
++- The number is saved but **not marked confirmed**: nobody has proved it is theirs.
++- People who signed up before this change get their number copied across the next time they sign in.
+diff --git a/supabase/schema.sql b/supabase/schema.sql
+index 83ef9a5..3019ce4 100644
+--- a/supabase/schema.sql
++++ b/supabase/schema.sql
+@@ -28,12 +28,16 @@ alter table public.profiles add column if not exists avatar_url text;
+ alter table public.profiles add column if not exists updated_at timestamptz not null default now();
+ 
+ -- ---------------------------------------------------------------- saved chats
++-- Each row says who wrote it: user_id is the exact account (and is what every lookup uses); author is that person's name,
++-- so the Table Editor shows who a chat belongs to without looking the id up. (username holds the same name and is kept for
++-- older code; email and phone are the account's contact details at the time of saving.)
+ -- The page makes a chat's id from the clock (a number of milliseconds), so two people could in theory pick the same
+ -- id. The primary key is (user_id, id) so that never matters: each person's chats are their own. (The server also
+ -- refuses to save over a chat id that belongs to someone else.)
+ create table if not exists public.chats (
+   id          text not null,
+   user_id     uuid not null references auth.users(id) on delete cascade,
++  author      text,
+   username    text,
+   email       text,
+   phone       text,
+@@ -44,11 +48,20 @@ create table if not exists public.chats (
+   primary key (user_id, id)
+ );
+ -- for projects whose chats table was made before these columns existed (what chats.sql was meant to do)
++alter table public.chats add column if not exists author text;
+ alter table public.chats add column if not exists username text;
+ alter table public.chats add column if not exists email text;
+ alter table public.chats add column if not exists phone text;
+ alter table public.chats add column if not exists updated_at timestamptz not null default now();
+ create index if not exists chats_user_created_idx on public.chats (user_id, created_at desc);
++-- fill in the author of chats saved before this column existed: the saved name, else the profile's name, else the start of the email
++update public.chats c
++set author = coalesce(
++  nullif(c.username, ''),
++  (select nullif(p.name, '') from public.profiles p where p.id = c.user_id),
++  (select nullif(split_part(u.email, '@', 1), '') from auth.users u where u.id = c.user_id)
++)
++where c.author is null or c.author = '';
+ 
+ -- OPTIONAL, only if your existing chats table has "id" alone as its primary key (check in the Table Editor):
+ -- this makes it match the table above. Not needed for safety, because the server now checks chat ownership.

@@ -79,14 +79,28 @@ const profileWrites = [];
 // Supabase Auth's email features, as the real service answers them. `authCalls` records what reached it and with WHOSE token.
 const authCalls = [];
 let profileRow = null; // the saved profiles row (null = none yet)
+let tokenMode = "invalid"; // /auth/v1/token: "invalid" (wrong password) | "banned" | "ok" (a real sign-in / refresh)
+let bannedUntil = null, verifyCode = "123456", verifyBanned = false, takenPhone = null, signupExisting = false, chatsMissingColumn = null;
+const chatPatches = [];
+const phoneWrites = []; // phone numbers written to auth.users by the admin API
 let unconfirmedLogin = false, recoverMode = "ok", reauthCode = "123456", passwordNeedsCode = true, emailChangeAppliesAtOnce = false;
 const sbServer = http.createServer((req, res) => {
   let raw = ""; req.on("data", d => raw += d); req.on("end", () => {
     const url = new URL(req.url, "http://x");
     const json = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
     const bearer = (req.headers.authorization || "").split(" ")[1];
-    if (url.pathname === "/auth/v1/token") return unconfirmedLogin ? json(400, { code: 400, error_code: "email_not_confirmed", msg: "Email not confirmed" }) : json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
-    if (url.pathname === "/auth/v1/signup") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "signup", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { id: "22222222-2222-4222-8222-222222222222", aud: "authenticated", email: b.email, user_metadata: b.data || {}, identities: [{}] }); }
+    if (url.pathname === "/auth/v1/token") {
+      if (tokenMode === "banned") return json(403, { code: 403, error_code: "user_banned", msg: "User is banned" });
+      if (tokenMode === "ok") return json(200, { access_token: TOKEN, refresh_token: "rt-fresh", expires_in: 3600, token_type: "bearer", user: { ...USER, banned_until: bannedUntil } });
+      return unconfirmedLogin ? json(400, { code: 400, error_code: "email_not_confirmed", msg: "Email not confirmed" }) : json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
+    }
+    if (url.pathname === "/auth/v1/verify" && req.method === "POST") { // the 6-digit code from a sign-up / reset email
+      const b = JSON.parse(raw || "{}"); authCalls.push({ what: "verify", body: b });
+      if (verifyBanned) return json(403, { code: 403, error_code: "user_banned", msg: "User is banned" });
+      if (b.token !== verifyCode) return json(403, { code: 403, error_code: "otp_expired", msg: "Token has expired or is invalid" });
+      return json(200, { access_token: TOKEN, refresh_token: "rt-from-code", expires_in: 3600, token_type: "bearer", user: { ...USER, email: b.email } });
+    }
+    if (url.pathname === "/auth/v1/signup") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "signup", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { id: "22222222-2222-4222-8222-222222222222", aud: "authenticated", email: b.email, user_metadata: b.data || {}, identities: signupExisting ? [] : [{}] }); }
     if (url.pathname === "/auth/v1/recover") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "recover", redirect: url.searchParams.get("redirect_to"), body: b }); return recoverMode === "ratelimit" ? json(429, { code: 429, error_code: "over_email_send_rate_limit", msg: "email rate limit exceeded" }) : recoverMode === "error" ? json(500, { msg: "boom" }) : json(200, {}); }
     if (url.pathname === "/auth/v1/resend") { const b = JSON.parse(raw || "{}"); authCalls.push({ what: "resend", redirect: url.searchParams.get("redirect_to"), body: b }); return json(200, { message_id: "m" }); }
     if (url.pathname === "/auth/v1/reauthenticate") { authCalls.push({ what: "reauthenticate", bearer }); return bearer === TOKEN ? json(200, {}) : json(401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" }); }
@@ -107,7 +121,7 @@ const sbServer = http.createServer((req, res) => {
       }
       return json(200, USER);
     }
-    if (url.pathname === "/auth/v1/user") return bearer === TOKEN && !deletedUser ? json(200, USER) : json(401, { message: "bad jwt" });
+    if (url.pathname === "/auth/v1/user") return bearer === TOKEN && !deletedUser ? json(200, { ...USER, banned_until: bannedUntil }) : json(401, { message: "bad jwt" });
     if (url.pathname === "/auth/v1/logout") { authCalls.push({ what: "logout", scope: url.searchParams.get("scope"), bearer }); res.writeHead(204); return res.end(); }
     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "DELETE") { userDeletes++; deletedUser = true; return json(200, {}); }
     if (url.pathname === "/rest/v1/profiles") { if (req.method === "GET") return json(200, profileRow ? [profileRow] : []); if (raw) profileWrites.push({ method: req.method, body: JSON.parse(raw) }); res.writeHead(201); return res.end(); }
@@ -138,13 +152,14 @@ const sbServer = http.createServer((req, res) => {
       }, 15);
     }
     if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "GET") return json(200, USER); // getUserById: the server reads the current metadata before changing it
-    if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "PUT") { const b = JSON.parse(raw); adminUpdates.push(b); USER.user_metadata = b.user_metadata || USER.user_metadata; return json(200, USER); }
+    if (url.pathname.startsWith("/auth/v1/admin/users/") && req.method === "PUT") { const b = JSON.parse(raw); if (b.phone) { if (b.phone === takenPhone) return json(422, { code: 422, error_code: "phone_exists", msg: "Phone number already registered by another user" }); phoneWrites.push({ id: url.pathname.split("/").pop(), phone: b.phone }); return json(200, { ...USER, phone: b.phone.replace(/\D/g, "") }); } adminUpdates.push(b); USER.user_metadata = b.user_metadata || USER.user_metadata; return json(200, USER); }
     if (url.pathname === "/auth/v1/admin/users") return json(200, { users: [] });
     if (url.pathname === "/storage/v1/bucket") return json(200, {});
     if (url.pathname === "/rest/v1/chats") {
       const match = row => [...url.searchParams].every(([k, v]) => !/^(eq|neq)\./.test(v) || (v.startsWith("eq.") ? String(row[k]) === v.slice(3) : String(row[k]) !== v.slice(4)));
+      if (req.method === "PATCH") { chatPatches.push({ query: url.search, body: JSON.parse(raw) }); res.writeHead(204); return res.end(); } // the rename sync
       if (req.method === "GET") return json(200, chatRows.filter(match).slice(0, Number(url.searchParams.get("limit")) || 1000));
-      if (req.method === "POST") { const b = JSON.parse(raw); const i = chatRows.findIndex(r => r.id === b.id); if (i >= 0) chatRows[i] = b; else chatRows.push(b); res.writeHead(201); return res.end(); } // like a table keyed on id alone
+      if (req.method === "POST") { const b = JSON.parse(raw); if (chatsMissingColumn && chatsMissingColumn in b) return json(400, { code: "PGRST204", message: `Could not find the '${chatsMissingColumn}' column of 'chats' in the schema cache` }); const i = chatRows.findIndex(r => r.id === b.id); if (i >= 0) chatRows[i] = b; else chatRows.push(b); res.writeHead(201); return res.end(); } // like a table keyed on id alone
     }
     if (url.pathname === "/rest/v1/user_memories") {
       if (memoryTableMissing) return json(404, { code: "PGRST205", message: "Could not find the table 'public.user_memories' in the schema cache" });
@@ -565,6 +580,187 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert(/Not a new high score/.test(await say(150)));
     await Promise.all([save(300), save(400), save(350), save(250)]); // finish in any order
     assert.strictEqual(scoreRows.pacman_highscores[USER.id].high_score, 400);
+  });
+
+  console.log("\nbanned or suspended accounts");
+  const FUTURE = () => new Date(Date.now() + 3600e3).toISOString(), PAST = () => new Date(Date.now() - 3600e3).toISOString();
+  const callsOf = what => authCalls.filter(c => c.what === what), lastOf = what => callsOf(what)[callsOf(what).length - 1];
+  const waitForCache = () => sleep(320); // AUTH_CACHE_MS is 250 in these tests: after that Supabase is asked again
+  await t("a banned account's sign-in is turned away by every route with 403 'user_banned' (also when the token is in the body), and its Supabase sessions are ended", async () => {
+    assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "fine before the ban");
+    bannedUntil = FUTURE(); await waitForCache();
+    const before = authCalls.length;
+    for (const [m, route, opts] of [["GET", "/auth/session", { token: TOKEN }], ["GET", "/chats", { token: TOKEN }], ["POST", "/chats", { body: { token: TOKEN, id: "1900000000000", title: "x", history: [] } }], ["GET", "/profile", { token: TOKEN }]]) {
+      const r = await send(m, route, opts); const j = await r.json();
+      assert.strictEqual(r.status, 403, m + " " + route); assert.strictEqual(j.code, "user_banned"); assert(/banned or suspended/.test(j.error), j.error);
+    }
+    assert.strictEqual((await chat("hello", { token: TOKEN })).status, 403, "the AI too");
+    await sleep(100);
+    assert(authCalls.slice(before).some(c => c.what === "logout" && c.scope === "global"), "every session of that person was ended at Supabase");
+    assert.strictEqual(chatRows.some(r => r.id === "1900000000000"), false, "nothing was saved");
+  });
+  await t("a bad or missing token is still just 401 (the ban check never gets in the way), and other people are unaffected", async () => {
+    assert.strictEqual((await send("GET", "/auth/session", { token: "not-a-token" })).status, 401);
+    assert.strictEqual((await send("GET", "/auth/session")).status, 401);
+    assert.strictEqual((await send("GET", "/ping")).status, 200);
+  });
+  await t("a suspension ends by itself: once banned_until is past (or cleared) the account works again", async () => {
+    bannedUntil = PAST(); await waitForCache();
+    assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "an expired suspension");
+    bannedUntil = FUTURE(); await waitForCache(); assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 403);
+    bannedUntil = null; await waitForCache(); assert.strictEqual((await send("GET", "/auth/session", { token: TOKEN })).status, 200, "unbanned");
+  });
+  await t("signing in as a banned account says so (403 user_banned), not 'wrong password'; an ordinary wrong password is unchanged", async () => {
+    tokenMode = "banned";
+    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); const j = await r.json();
+    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(/banned or suspended/.test(j.error) && !/password/i.test(j.error), j.error);
+    tokenMode = "invalid";
+    const w = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "wrong-one" } }); assert.strictEqual(w.status, 400); assert(!(await w.json()).code);
+  });
+  await t("if Supabase lets a banned account sign in anyway, the server still refuses and ends the session", async () => {
+    tokenMode = "ok"; bannedUntil = FUTURE(); const before = authCalls.length;
+    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); const j = await r.json();
+    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(!j.session && !j.access_token);
+    await sleep(80); assert(authCalls.slice(before).some(c => c.what === "logout" && c.scope === "global"));
+    tokenMode = "invalid"; bannedUntil = null;
+  });
+  await t("refreshing a banned account's session says 'banned' (not just 'session expired'); other refresh failures are unchanged", async () => {
+    tokenMode = "banned";
+    const r = await send("POST", "/auth/refresh", { body: { refresh_token: "rt" } }); const j = await r.json();
+    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned");
+    tokenMode = "invalid";
+    // (a different token string: the Supabase library briefly remembers a failed refresh for the same one)
+    const old2 = await send("POST", "/auth/refresh", { body: { refresh_token: "rt-an-old-one" } }); const old2Body = await old2.text();
+    assert.strictEqual(old2.status, 401, "an old or wrong refresh token is still 'sign in again': " + old2Body);
+  });
+  await waitForCache();
+
+  console.log("\nphone numbers reach auth.users");
+  await t("sign-up writes the phone to auth.users.phone (E.164, via the admin API) and the profile, and sends E.164 in the metadata too", async () => {
+    phoneWrites.length = 0; profileWrites.length = 0;
+    const before = authCalls.filter(c => c.what === "signup").length;
+    const r = await send("POST", "/auth/signup", { body: { email: "phone@x.co", password: "longenough1", confirmPassword: "longenough1", name: "Pia", phone: "(314) 555-0123" } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(lastOf("signup").body.data.phone, "+13145550123", "metadata carries the clean number");
+    assert.deepStrictEqual(phoneWrites, [{ id: "22222222-2222-4222-8222-222222222222", phone: "+13145550123" }], "auth.users.phone was set");
+    const prof = profileWrites.find(w => w.body.phone); assert(prof && prof.body.phone === "+13145550123" && prof.body.name === "Pia", "profile has it too");
+  });
+  await t("numbers are accepted in common spellings and turned into one form", async () => {
+    for (const [typed, saved] of [["+44 20 7946 0958", "+442079460958"], ["314.555.0199", "+13145550199"], ["1 314 555 0188", "+13145550188"], ["0044 20 7946 0001", "+442079460001"]]) {
+      phoneWrites.length = 0;
+      await send("POST", "/auth/signup", { body: { email: "p2@x.co", password: "longenough1", confirmPassword: "longenough1", name: "P", phone: typed } });
+      assert.strictEqual(phoneWrites[0] && phoneWrites[0].phone, saved, typed);
+    }
+  });
+  await t("a phone number that can't be real is refused up front, with nothing sent to Supabase", async () => {
+    const before = authCalls.filter(c => c.what === "signup").length;
+    for (const bad of ["abc", "12", "555-CALL-NOW", "+0 123 456 789", "9".repeat(40)]) {
+      const r = await send("POST", "/auth/signup", { body: { email: "bad@x.co", password: "longenough1", confirmPassword: "longenough1", name: "B", phone: bad } });
+      assert.strictEqual(r.status, 400, bad); assert(/phone number doesn't look right/.test((await r.json()).error));
+    }
+    assert.strictEqual(callsOf("signup").length - before, 0);
+  });
+  await t("no phone typed: nothing is written, and sign-up still works", async () => {
+    phoneWrites.length = 0;
+    for (const phone of [undefined, "", "   "]) {
+      const r = await send("POST", "/auth/signup", { body: { email: "nophone@x.co", password: "longenough1", confirmPassword: "longenough1", name: "N", phone } }); assert.strictEqual(r.status, 200);
+    }
+    assert.strictEqual(phoneWrites.length, 0); assert.strictEqual(lastOf("signup").body.data.phone, undefined);
+  });
+  await t("signing up with an address that already has an account never touches anyone's phone (Supabase answers with no identities)", async () => {
+    phoneWrites.length = 0; signupExisting = true;
+    const r = await send("POST", "/auth/signup", { body: { email: "exists@x.co", password: "longenough1", confirmPassword: "longenough1", name: "E", phone: "+1 314 555 0100" } });
+    signupExisting = false;
+    assert.strictEqual(r.status, 200); assert.strictEqual(phoneWrites.length, 0);
+  });
+  await t("a number another account already has is refused by Supabase: sign-up still works, the number stays in the profile", async () => {
+    takenPhone = "+13145550177"; phoneWrites.length = 0; profileWrites.length = 0;
+    const r = await send("POST", "/auth/signup", { body: { email: "dup@x.co", password: "longenough1", confirmPassword: "longenough1", name: "D", phone: "314-555-0177" } });
+    takenPhone = null;
+    assert.strictEqual(r.status, 200); assert.strictEqual(phoneWrites.length, 0);
+  });
+  await t("accounts made before this existed: the number in their sign-up details is copied to auth.users.phone when they next sign in (once)", async () => {
+    phoneWrites.length = 0; USER.user_metadata = { name: "Sam", phone: "+1 (555) 010-9999" }; tokenMode = "ok";
+    const r = await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); assert.strictEqual(r.status, 200);
+    await sleep(150);
+    assert.deepStrictEqual(phoneWrites, [{ id: USER.id, phone: "+15550109999" }]);
+    await send("POST", "/auth/login", { body: { email: "a@b.c", password: "longenough1" } }); await sleep(100);
+    assert.strictEqual(phoneWrites.length, 1, "not retried on every sign-in");
+    tokenMode = "invalid"; USER.user_metadata = { name: "Sam" }; adminUpdates.length = 0;
+  });
+
+  console.log("\nchats record their author");
+  await t("a saved chat carries its author (the person's name) next to user_id, username, email and phone", async () => {
+    const r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000001", title: "authored", history: [{ role: "user", content: "hi" }] } });
+    assert.strictEqual(r.status, 200);
+    const row = chatRows.find(x => x.id === "1900000000001");
+    assert(row.author && typeof row.author === "string", "author saved: " + JSON.stringify(row));
+    assert.strictEqual(row.author, row.username); assert.strictEqual(row.user_id, USER.id);
+  });
+  await t("changing your name updates the author (and username) on every one of your chats", async () => {
+    chatPatches.length = 0;
+    const r = await send("POST", "/auth/update", { token: TOKEN, body: { name: "Samantha" } }); assert.strictEqual(r.status, 200);
+    await sleep(60);
+    const bodies = chatPatches.map(p => JSON.stringify(p.body)).sort();
+    assert.deepStrictEqual(bodies, ['{"author":"Samantha"}', '{"username":"Samantha"}']);
+    assert(chatPatches.every(p => p.query.includes("user_id=eq." + USER.id)), "only their own chats");
+    USER.user_metadata = { name: "Sam" }; adminUpdates.length = 0;
+  });
+  await t("a project that hasn't run the SQL yet still saves chats: first without author, then with the bare columns", async () => {
+    chatsMissingColumn = "author";
+    let r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000002", title: "no author column", history: [{ role: "user", content: "hi" }] } });
+    assert.strictEqual(r.status, 200); let row = chatRows.find(x => x.id === "1900000000002");
+    assert(row && !("author" in row) && row.username && row.email !== undefined, "kept username/email/phone: " + JSON.stringify(row));
+    chatsMissingColumn = "username";
+    r = await send("POST", "/chats", { token: TOKEN, body: { id: "1900000000003", title: "old table", history: [{ role: "user", content: "hi" }] } });
+    assert.strictEqual(r.status, 200); row = chatRows.find(x => x.id === "1900000000003");
+    assert(row && !("author" in row) && !("username" in row) && row.title === "old table" && row.user_id === USER.id, "bare columns: " + JSON.stringify(row));
+    chatsMissingColumn = null;
+  });
+
+  console.log("\nthe 6-digit email codes");
+  await t("/auth/verify-code: a good code returns the session; the right type and address reach Supabase", async () => {
+    for (const type of ["signup", "recovery"]) {
+      const before = authCalls.length;
+      const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "123456", type } }); const j = await r.json();
+      assert.strictEqual(r.status, 200, type); assert(j.session && j.session.access_token === TOKEN && j.user, "session returned");
+      const v = authCalls.slice(before).find(c => c.what === "verify");
+      assert.deepStrictEqual([v.body.email, v.body.token, v.body.type], ["nia@x.co", "123456", type]);
+    }
+    const spaced = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: " 123 456 ", type: "signup" } }); assert.strictEqual(spaced.status, 200, "spaces from copy-paste are fine");
+  });
+  await t("/auth/verify-code: a wrong or expired code is a plain 400 with a helpful message", async () => {
+    const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "000000", type: "signup" } }); const j = await r.json();
+    assert.strictEqual(r.status, 400); assert(/isn't right, or it has expired/.test(j.error)); assert(!j.session);
+  });
+  await t("/auth/verify-code: only 6 digits are accepted, and nothing reaches Supabase for anything else", async () => {
+    const before = authCalls.filter(c => c.what === "verify").length;
+    for (const code of ["12345", "1234567", "12345678", "abcdef", "12 34 5", "", null, 123456, ["123456"]]) {
+      const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code, type: "signup" } });
+      assert.strictEqual(r.status, 400, JSON.stringify(code)); if (code !== "") assert(/6 digits|6-digit/.test((await r.json()).error));
+    }
+    for (const body of [{ code: "123456", type: "signup" }, { email: "not-an-email", code: "123456", type: "signup" }, { email: "nia@x.co", code: "123456", type: "magiclink" }, { email: "nia@x.co", code: "123456" }]) {
+      assert.strictEqual((await send("POST", "/auth/verify-code", { body })).status, 400, JSON.stringify(body));
+    }
+    assert.strictEqual(callsOf("verify").length - before, 0);
+  });
+  await t("/auth/verify-code: a banned account gets the banned message and its session is ended", async () => {
+    verifyBanned = true; const before = authCalls.length;
+    const r = await send("POST", "/auth/verify-code", { body: { email: "nia@x.co", code: "123456", type: "signup" } }); const j = await r.json();
+    verifyBanned = false;
+    assert.strictEqual(r.status, 403); assert.strictEqual(j.code, "user_banned"); assert(!j.session);
+  });
+  await t("the password change code is 6 digits too: other lengths are refused before Supabase, a wrong 6-digit code is flagged as a code problem, a weak password is not", async () => {
+    const send2 = body => send("POST", "/auth/password", { token: TOKEN, body });
+    for (const code of ["12345", "1234567", "12345678", "abcdef"]) {
+      const r = await send2({ password: "newpassword1", confirmPassword: "newpassword1", code }); assert.strictEqual(r.status, 400, code); assert(/6 digits|6-digit/.test((await r.json()).error), code);
+    }
+    const wrong = await (await send2({ password: "newpassword1", confirmPassword: "newpassword1", code: "000000" })).json();
+    assert.strictEqual(wrong.badCode, true, "the dialog keeps itself open for this one");
+    const weak = await (await send2({ password: "short", confirmPassword: "short", code: "123456" })).json();
+    assert(weak.error && !weak.badCode, "a weak password closes the dialog and shows the reason");
+    const need = await (await send2({ password: "newpassword1", confirmPassword: "newpassword1" })).json(); assert.strictEqual(need.needsCode, true);
+    const good = await send2({ password: "newpassword1", confirmPassword: "newpassword1", code: reauthCode }); assert.strictEqual(good.status, 200);
   });
 
   console.log("\nthe creator link");

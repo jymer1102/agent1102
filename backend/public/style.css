@@ -911,8 +911,6 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 #auth-social { display:flex; flex-direction:column; gap:inherit; }
 .field-note.pending { color:var(--accent-bright); }
 .field-note.pending strong { color:inherit; overflow-wrap:anywhere; }
-.code-box { display:flex; flex-direction:column; gap:0.6rem; padding:0.8rem; border:1px solid var(--border); border-radius:12px; background:var(--surface2); }
-.code-box[hidden] { display:none; }
 #password-code { letter-spacing:0.12em; }
 
 
@@ -953,3 +951,39 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 .quiz-chart { margin:0 0 0.8rem; }
 .quiz-chart .chart-canvas-wrap { height:260px; }
 .quiz-missing { margin:0 0 0.6rem; font-style:italic; }
+
+
+/* ============================================================
+   The 6-digit code window (js/codedialog.js): full screen, solid, one box per digit
+   ============================================================ */
+body.code-dialog-open { overflow:hidden; }
+.code-dialog { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; overflow-y:auto;
+  padding:calc(1.5rem + env(safe-area-inset-top, 0px)) 1.25rem calc(1.5rem + env(safe-area-inset-bottom, 0px)); background:var(--bg); color:var(--text); }
+.code-dialog [hidden], .code-dialog[hidden] { display:none !important; }
+.code-dialog-close { position:absolute; top:calc(0.9rem + env(safe-area-inset-top, 0px)); right:1rem; }
+.code-dialog-card { width:100%; max-width:440px; margin:auto; display:flex; flex-direction:column; align-items:center; gap:0.95rem; text-align:center; }
+.code-dialog-icon { width:4rem; height:4rem; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.7rem; color:var(--accent-bright); background:var(--card-bg); border:1px solid var(--card-border); }
+.code-dialog h2 { margin:0; font-family:var(--font-display); font-size:1.65rem; font-weight:600; letter-spacing:-0.01em; }
+.code-dialog-text { margin:0; color:var(--text-muted); font-size:0.95rem; line-height:1.55; overflow-wrap:anywhere; }
+.code-dialog-text strong { color:var(--text); font-weight:600; }
+.code-boxes { display:flex; justify-content:center; gap:0.6rem; margin:0.35rem 0 0.1rem; }
+.code-digit { width:3.2rem; height:4rem; padding:0; border-radius:12px; border:1.5px solid var(--card-border); background:var(--card-bg); color:var(--text);
+  font:600 1.75rem/1 var(--font-display, inherit); text-align:center; caret-color:var(--accent-bright); transition:border-color .15s, box-shadow .15s; }
+.code-digit:focus { outline:none; border-color:var(--accent-bright); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent-bright) 28%, var(--bg)); }
+.code-digit.filled { border-color:var(--accent); }
+.code-digit:disabled { opacity:1; color:var(--text-muted); }
+.code-boxes.error .code-digit { border-color:#e74c3c; }
+.code-boxes.shake { animation:code-shake .38s; }
+@keyframes code-shake { 20%, 60% { transform:translateX(-7px); } 40%, 80% { transform:translateX(7px); } }
+@media (prefers-reduced-motion: reduce) { .code-boxes.shake { animation:none; } }
+.code-dialog-error { min-height:1.25rem; margin:0; color:#ff6b6d; font-size:0.9rem; }
+.light .code-dialog-error { color:#c0392b; }
+.code-dialog-info { margin:0; color:var(--text-muted); font-size:0.88rem; }
+.code-dialog-info:empty { display:none; }
+.code-dialog-verify { width:100%; max-width:20rem; }
+.code-dialog-verify:disabled { cursor:not-allowed; }
+.code-dialog-note { margin:0; color:var(--text-muted); font-size:0.82rem; line-height:1.5; }
+@media (max-width:420px) {
+  .code-boxes { gap:0.4rem; }
+  .code-digit { width:2.6rem; height:3.4rem; font-size:1.5rem; }
+}

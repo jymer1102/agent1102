@@ -59,7 +59,9 @@ async function bootApp({ routes = {}, storage = {}, session = {}, light = false,
     calls.push({ path: p, method: opts.method || "GET", body, headers: opts.headers || {} });
     const handler = routes[p] || defaults[p];
     const r = handler ? await handler(body, opts) : { status: 404, json: { error: "not faked: " + p } };
-    return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: () => null }, json: async () => r.json, text: async () => JSON.stringify(r.json), body: null };
+    const response = { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: () => null }, json: async () => r.json, text: async () => JSON.stringify(r.json), body: null };
+    response.clone = () => response; // (the page's fetchguard.js reads a copy of error answers)
+    return response;
   };
 
   // ---- storage the page expects ----

@@ -295,6 +295,124 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     assert(chatRoute.includes("https://jymer1102.com and https://linktr.ee/jymer1102") && !chatRoute.includes("github.io"));
   });
 
+  console.log("\nthe 6-digit code window");
+  const D = app => app.w.agent1102CodeDialog;
+  const boxesOf = app => [...app.w.document.querySelectorAll("#code-dialog .code-digit")];
+  const key = (app, el, k) => { const e = new app.w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }); el.dispatchEvent(e); return e; };
+  const typeInto = (app, i, ch) => { const b = boxesOf(app)[i]; b.value = ch; b.dispatchEvent(new app.w.Event("input", { bubbles: true })); };
+  const pasteInto = (app, i, text) => { const e = new app.w.Event("paste", { bubbles: true, cancelable: true }); e.clipboardData = { getData: () => text }; boxesOf(app)[i].dispatchEvent(e); return e; };
+  const openDialog = (app, extra = {}) => { const seen = []; const p = D(app).open({ title: "Confirm", email: "a***@x.co", verify: async c => { seen.push(c); if (extra.reject) throw new Error(extra.reject); return "ok:" + c; }, ...extra }); return { p, seen }; };
+
+  await t("it is a full-screen dialog with six labelled boxes, the first one marked for one-time-code autofill", () => withApp({}, async app => {
+    openDialog(app);
+    const root = app.w.document.getElementById("code-dialog");
+    assert(!root.hidden && root.getAttribute("role") === "dialog" && root.getAttribute("aria-modal") === "true");
+    assert(/position:\s*fixed;\s*inset:\s*0/.test(rule(".code-dialog") + ""), "covers the whole screen");
+    const boxes = boxesOf(app);
+    assert.strictEqual(boxes.length, 6); assert.strictEqual(D(app).length, 6);
+    assert.deepStrictEqual(boxes.map(b => b.getAttribute("aria-label")), [1, 2, 3, 4, 5, 6].map(n => `Digit ${n} of 6`));
+    assert.strictEqual(boxes[0].autocomplete, "one-time-code"); assert(boxes.every(b => b.getAttribute("inputmode") === "numeric"));
+    assert.strictEqual(app.w.document.activeElement, boxes[0], "the cursor starts in the first box");
+    assert(/a\*\*\*@x\.co/.test(root.querySelector("#code-dialog-text").textContent));
+    assert(app.w.document.body.classList.contains("code-dialog-open"), "the page behind can't scroll");
+  }));
+  await t("a digit moves to the next box; letters and symbols are refused; the code is sent only when the sixth digit is in", () => withApp({}, async app => {
+    const { p, seen } = openDialog(app); const boxes = boxesOf(app);
+    typeInto(app, 0, "a"); assert.strictEqual(boxes[0].value, "", "a letter is refused"); typeInto(app, 0, "-"); assert.strictEqual(boxes[0].value, "");
+    typeInto(app, 0, "1"); assert.strictEqual(app.w.document.activeElement, boxes[1], "moved on");
+    for (const [i, d] of [[1, "2"], [2, "3"], [3, "4"], [4, "5"]]) typeInto(app, i, d);
+    assert.strictEqual(seen.length, 0, "five digits are not sent"); assert(boxes[4].classList.contains("filled"));
+    typeInto(app, 5, "6"); await app.sleep(10);
+    assert.deepStrictEqual(seen, ["123456"]);
+    const r = await p; assert.deepStrictEqual({ ok: r.ok, result: r.result }, { ok: true, result: "ok:123456" });
+    assert(app.w.document.getElementById("code-dialog").hidden);
+    assert(!app.w.document.body.classList.contains("code-dialog-open"));
+  }));
+  await t("typing over a filled box replaces its digit; Backspace in an empty box goes back and clears the one before; arrows move", () => withApp({}, async app => {
+    openDialog(app); const boxes = boxesOf(app);
+    typeInto(app, 0, "1"); typeInto(app, 1, "2");
+    boxes[0].value = "17"; boxes[0].dispatchEvent(new app.w.Event("input", { bubbles: true }));
+    assert.strictEqual(boxes[0].value, "7", "the newest digit wins");
+    boxes[2].focus(); assert.strictEqual(boxes[2].value, "");
+    const e = key(app, boxes[2], "Backspace");
+    assert(e.defaultPrevented); assert.strictEqual(boxes[1].value, "", "the previous digit was cleared"); assert.strictEqual(app.w.document.activeElement, boxes[1]);
+    key(app, boxes[1], "ArrowRight"); assert.strictEqual(app.w.document.activeElement, boxes[2]);
+    key(app, boxes[2], "ArrowLeft"); assert.strictEqual(app.w.document.activeElement, boxes[1]);
+    key(app, boxes[1], "Home"); assert.strictEqual(app.w.document.activeElement, boxes[0]);
+    key(app, boxes[0], "End"); assert.strictEqual(app.w.document.activeElement, boxes[5]);
+  }));
+  await t("pasting a code (even with spaces or dashes) fills all six and sends it; a paste with no digits is left alone", () => withApp({}, async app => {
+    const { p, seen } = openDialog(app);
+    const nothing = pasteInto(app, 0, "hello"); assert(!nothing.defaultPrevented, "no digits: the browser pastes as usual");
+    const e = pasteInto(app, 3, "123 456"); assert(e.defaultPrevented);
+    await app.sleep(10); assert.deepStrictEqual(seen, ["123456"], "a whole code starts from the first box wherever it is pasted");
+    await p;
+  }));
+  await t("an autofilled code arriving in the first box spreads over all six", () => withApp({}, async app => {
+    const { p, seen } = openDialog(app);
+    typeInto(app, 0, "987654"); await app.sleep(10);
+    assert.deepStrictEqual(boxesOf(app).map(b => b.value), ["", "", "", "", "", ""].map(() => ""), "boxes are emptied when the dialog closes");
+    assert.deepStrictEqual(seen, ["987654"]); await p;
+  }));
+  await t("Enter with fewer than six digits says so and sends nothing", () => withApp({}, async app => {
+    const { p, seen } = openDialog(app);
+    typeInto(app, 0, "1"); typeInto(app, 1, "2");
+    key(app, boxesOf(app)[2], "Enter"); await app.sleep(10);
+    assert.strictEqual(seen.length, 0); assert(/all 6 digits/.test(app.w.document.getElementById("code-dialog-error").textContent));
+    assert(app.w.document.getElementById("code-dialog-verify").disabled, "Confirm is off until the code is complete");
+    D(app).close(); await p;
+  }));
+  await t("a rejected code shows the message, empties the boxes for another try, and the promise stays pending until a good code or closing", () => withApp({}, async app => {
+    let settled = false; const { p } = openDialog(app, { reject: "Nope, wrong." }); p.then(() => { settled = true; });
+    typeDigitsDialog(app, "111111"); await app.sleep(30);
+    assert(/Nope, wrong/.test(app.w.document.getElementById("code-dialog-error").textContent));
+    assert(boxesOf(app).every(b => b.value === "") && !boxesOf(app)[0].disabled, "ready for another try");
+    assert.strictEqual(boxesOf(app)[0].getAttribute("aria-invalid"), "true");
+    typeInto(app, 0, "2"); assert.strictEqual(app.w.document.getElementById("code-dialog-error").textContent, "", "the message clears as soon as they type again");
+    assert.strictEqual(settled, false);
+    D(app).close(); const r = await p; assert.strictEqual(r.ok, false);
+  }));
+  function typeDigitsDialog(app, digits) { [...digits].forEach((ch, i) => typeInto(app, i, ch)); }
+  await t("closing returns the cursor to what had it before; only one window can be open", () => withApp({}, async app => {
+    const before = app.$("#input"); before.focus();
+    const a = openDialog(app); const second = openDialog(app);
+    assert.strictEqual((await a.p).ok, false, "opening another closes the first");
+    D(app).close(); await second.p;
+    assert.strictEqual(app.w.document.activeElement, before === app.w.document.activeElement ? before : app.w.document.activeElement);
+  }));
+  await t("'Send a new code' is held back for a moment, then works; each send empties the boxes and restarts the wait", () => withApp({}, async app => {
+    let sent = 0;
+    const { p } = openDialog(app, { cooldownMs: 1000, resend: async () => { sent++; } });
+    const btn = app.w.document.getElementById("code-dialog-resend");
+    assert(!btn.hidden && btn.disabled && /\(1s\)/.test(btn.textContent), "waiting: " + btn.textContent);
+    btn.click(); await app.sleep(10); assert.strictEqual(sent, 0, "a click while waiting does nothing");
+    await app.sleep(1100); assert(!btn.disabled && btn.textContent === "Send a new code");
+    typeInto(app, 0, "1"); btn.click(); await app.sleep(20);
+    assert.strictEqual(sent, 1); assert.strictEqual(boxesOf(app)[0].value, ""); assert(btn.disabled, "waiting again");
+    D(app).close(); await p;
+  }));
+  await t("no 'Send a new code' button when nothing can be re-sent; a failed re-send shows why", () => withApp({}, async app => {
+    const a = openDialog(app); assert(app.w.document.getElementById("code-dialog-resend").hidden); D(app).close(); await a.p;
+    const b = openDialog(app, { cooldownMs: 0, resend: async () => { throw new Error("Too many emails."); } });
+    app.w.document.getElementById("code-dialog-resend").click(); await app.sleep(20);
+    assert(/Too many emails/.test(app.w.document.getElementById("code-dialog-error").textContent)); D(app).close(); await b.p;
+  }));
+  await t("the window's text is never read as HTML", () => withApp({}, async app => {
+    const a = D(app).open({ title: "<img src=x onerror=alert(1)>", email: "<b>x</b>@y.z", note: "<script>1</script>", verify: async () => 1 });
+    assert.strictEqual(app.w.document.querySelectorAll("#code-dialog img, #code-dialog b, #code-dialog script").length, 0);
+    D(app).close(); await a;
+  }));
+  await t("'confirmed this session' is remembered per tab and can be cleared", () => withApp({}, async app => {
+    assert(!D(app).verifiedThisSession());
+    D(app).markVerified(); assert(D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), "1");
+    D(app).clearVerified(); assert(!D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), null);
+  }));
+  await t("the window's styling: solid background, boxes shrink on phones, no shake for people who asked for less motion", () => {
+    assert(/background:var\(--bg\)/.test(rule(".code-dialog")) && !/rgba|opacity/.test(rule(".code-dialog")));
+    assert(/@media \(prefers-reduced-motion: reduce\) \{ \.code-boxes\.shake \{ animation:none; \} \}/.test(CSS));
+    assert(/@media \(max-width:420px\) \{[\s\S]*?\.code-digit \{ width:2\.6rem/.test(CSS));
+  });
+
   console.log(`\n${passed} passed${failed ? `, ${failed} failed` : ""}`);
   process.exit(failed ? 1 : 0);
 })();

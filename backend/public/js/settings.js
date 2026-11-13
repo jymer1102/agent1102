@@ -27,7 +27,13 @@
     } catch (_) { throw new Error(SERVER_DOWN); }
     let data = {};
     try { data = await res.json(); } catch (_) { /* an empty or non-JSON reply */ }
-    if (!res.ok || data.error) throw new Error(data.error || GENERIC);
+    if (!res.ok || data.error) {
+      const err = new Error(data.error || GENERIC);
+      err.status = res.status;
+      err.needsCode = !!data.needsCode; // Supabase wants a fresh emailed code before it will change the password
+      err.badCode = !!data.badCode;     // the code that was typed is wrong or has expired
+      throw err;
+    }
     return data;
   }
 
@@ -46,11 +52,9 @@
 
   const isOpen = () => settingsModal.classList.contains("open");
 
-  // empties the password boxes and goes back to step 1 (no code asked for yet)
+  // empties the password boxes
   function resetPasswordForm() {
-    for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
-    $("password-code-box").hidden = true;
-    $("password-code-note").textContent = "";
+    for (const id of ["profile-password", "profile-password-confirm"]) $(id).value = "";
     hidePasswords();
   }
 
@@ -157,8 +161,10 @@
     } catch (e) { say(profileMsg, e.message, "err"); }
   }));
 
-  // Change password, in two steps. 1) Supabase emails a 6-digit code to the current address. 2) The code and the new password go together.
-  const codeBox = $("password-code-box"), codeNote = $("password-code-note");
+  // Change password. Supabase emails a 6-digit code to the current address and the person types it into the full-screen code window
+  // (js/codedialog.js); the code and the new password then go to the server together. Once a code has been accepted, the rest of
+  // this session (this tab, until they sign out) doesn't ask again. If Supabase itself wants a fresh code, the window opens anyway.
+  const codeDialog = window.agent1102CodeDialog;
   const newPassword = () => $("profile-password").value.trim(), newPasswordAgain = () => $("profile-password-confirm").value.trim();
 
   function checkNewPassword() {
@@ -166,33 +172,44 @@
     if (newPassword() !== newPasswordAgain()) { say(profileMsg, newPasswordAgain() ? "The two passwords don't match. Please type them again." : "Type your new password a second time to confirm it.", "err"); return false; }
     return true;
   }
-
-  async function sendPasswordCode(button) {
-    if (!checkNewPassword()) return;
-    await busy(button, async () => {
-      say(profileMsg, "");
-      try {
-        const r = await api("POST", "/auth/password/code");
-        codeBox.hidden = false;
-        say(codeNote, `I emailed a code to ${r.sentTo}. Enter it below to finish changing your password. It can take a minute, and it may land in spam.`);
-        $("password-code").focus();
-      } catch (e) { say(profileMsg, e.message, "err"); }
-    });
-  }
-  $("send-password-code").addEventListener("click", () => sendPasswordCode($("send-password-code")));
-  $("resend-password-code").addEventListener("click", () => sendPasswordCode($("resend-password-code")));
+  const sendPasswordCode = () => api("POST", "/auth/password/code");
+  const passwordChanged = () => {
+    resetPasswordForm();
+    say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
+  };
 
   $("save-password").addEventListener("click", () => busy($("save-password"), async () => {
     if (!checkNewPassword()) return;
-    const code = $("password-code").value.trim();
-    if (!code) return say(profileMsg, "Type the code from the email first.", "err");
     say(profileMsg, "");
-    try {
-      await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code });
-      for (const id of ["profile-password", "profile-password-confirm", "password-code"]) $(id).value = "";
-      codeBox.hidden = true; say(codeNote, ""); hidePasswords();
-      say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
-    } catch (e) { say(profileMsg, e.message, "err"); }
+
+    // already confirmed with a code in this session: just try. Supabase has the last word, and asks for a fresh code if it wants one.
+    if (codeDialog.verifiedThisSession()) {
+      try {
+        await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain() });
+        return passwordChanged();
+      } catch (e) {
+        if (!e.needsCode) return say(profileMsg, e.message, "err");
+        codeDialog.clearVerified();
+      }
+    }
+
+    let sent;
+    try { sent = await sendPasswordCode(); } catch (e) { return say(profileMsg, e.message, "err"); }
+    const outcome = await codeDialog.open({
+      title: "Confirm it's you",
+      email: sent.sentTo,
+      note: "This is to protect your account. You won't be asked again until your next sign-in.",
+      resend: sendPasswordCode,
+      // the code and the new password go together. A wrong code keeps the window open for another try; anything else (a password that's
+      // too weak, say) closes it, and the reason shows here.
+      verify: async code => {
+        try { return await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code }); }
+        catch (e) { if (!e.badCode) e.closeDialog = true; throw e; }
+      },
+    });
+    if (outcome.ok) { codeDialog.markVerified(); return passwordChanged(); }
+    if (outcome.error) return say(profileMsg, outcome.error.message, "err");
+    say(profileMsg, "Your password wasn't changed.");
   }));
 
   // ---------- Danger Zone ----------

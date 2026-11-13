@@ -3,11 +3,23 @@
 //
 //  Reading someone's memories or style settings must NEVER trust an unverified token (decoding a JWT
 //  locally doesn't prove it's real). Asking Supabase every time is slow, so a token that Supabase has
-//  already vouched for is remembered for a few minutes (never longer than the token itself lives).
+//  already vouched for is remembered for a short while (never longer than the token itself lives).
+//
+//  Bans: Supabase only stops a banned person from signing in or refreshing. A token they already hold keeps working until it
+//  runs out (up to an hour), and Supabase's own endpoints do not turn it away. So the app has to check `banned_until` itself,
+//  on the user Supabase just vouched for (isBanned below). The cache is kept short so a new ban is noticed within a minute.
 // ============================================================
 "use strict";
 
-function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500, rejectTtlMs = 30 * 1000, maxRejected = 1000 } = {}) {
+// true while the account is banned or suspended (Supabase: banned_until is a date in the future)
+function isBanned(user) {
+  const until = user && user.banned_until;
+  if (!until) return false;
+  const t = Date.parse(until);
+  return Number.isFinite(t) && t > Date.now();
+}
+
+function createAuth(supabase, { ttlMs = 60 * 1000, maxEntries = 500, rejectTtlMs = 30 * 1000, maxRejected = 1000 } = {}) {
   const cache = new Map();    // token -> { user, until }
   const rejected = new Map(); // token -> until: tokens Supabase has definitively refused (a short memory, so junk can't make us call it over and over)
   const inflight = new Map(); // token -> the lookup already running for it (the same request asks several times at once)
@@ -62,4 +74,4 @@ function createAuth(supabase, { ttlMs = 5 * 60 * 1000, maxEntries = 500, rejectT
   return { verify, bearer, invalidate };
 }
 
-module.exports = { createAuth };
+module.exports = { createAuth, isBanned };

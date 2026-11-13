@@ -20,6 +20,7 @@
   if (params.get("error")) {
     // an email link that is old, or was already used, comes back as otp_expired; anything else is a sign-in that didn't complete
     var why = (params.get("error_code") || "") + " " + (params.get("error_description") || "");
+    if (/banned/i.test(why)) return go("/?notice=banned"); // a Discord / GitHub sign-in for a banned or suspended account
     return go(/otp_expired|email link|expired|invalid/i.test(why) ? "/?notice=link_invalid" : "/?error=oauth_failed");
   }
 

@@ -153,8 +153,10 @@ const openSettings = async (app, page) => {
   } }, async app => {
     await openSettings(app);
     app.$("#profile-email").value = "new@x.co"; app.$("#save-email").click(); await app.sleep(40);
-    app.$("#profile-password").value = "hunter22!"; app.$("#profile-password-confirm").value = "hunter22!"; app.$("#send-password-code").click(); await app.sleep(40);
-    app.$("#password-code").value = "123456"; app.$("#save-password").click(); await app.sleep(40);
+    app.$("#profile-password").value = "hunter22!"; app.$("#profile-password-confirm").value = "hunter22!"; app.$("#save-password").click(); await app.sleep(40);
+    // the code is typed into the full-screen window (six boxes); the sixth digit sends it
+    [..."123456"].forEach((d, i) => { const box = app.w.document.querySelectorAll("#code-dialog .code-digit")[i]; box.value = d; box.dispatchEvent(new app.w.Event("input", { bubbles: true })); });
+    await app.sleep(40);
     assert.deepStrictEqual(callsTo(app, "/auth/email/change").map(c => c.body), [{ email: "new@x.co" }]);
     assert.strictEqual(callsTo(app, "/auth/password/code").length, 1);
     assert.deepStrictEqual(callsTo(app, "/auth/password").map(c => c.body), [{ password: "hunter22!", confirmPassword: "hunter22!", code: "123456" }]);
@@ -163,7 +165,7 @@ const openSettings = async (app, page) => {
   await t("empty boxes and server errors show a message in red; nothing is sent for empty ones", () => withApp({ routes: { "/auth/email/change": () => bad(400, "That email address doesn't look right.") } }, async app => {
     await openSettings(app);
     app.$("#profile-name").value = ""; app.$("#save-name").click();
-    app.$("#save-email").click(); app.$("#send-password-code").click(); app.$("#save-password").click(); await app.sleep(20);
+    app.$("#save-email").click(); app.$("#save-password").click(); await app.sleep(20);
     for (const p of ["/auth/update", "/auth/email/change", "/auth/password/code", "/auth/password"]) assert.strictEqual(callsTo(app, p).length, 0, p);
     assert(app.$("#profile-msg").classList.contains("err"));
     app.$("#profile-email").value = "nope"; app.$("#save-email").click(); await app.sleep(40);

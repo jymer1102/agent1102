@@ -36,9 +36,28 @@
   }
   setInterval(refreshToken, 10 * 60 * 1000);
 
+  // Banned or suspended. Supabase doesn't end a sign-in that already exists, so the server checks every request (and answers 403
+  // "user_banned"), and this page does the rest: signs the person out at once and says why. fetchguard.js sees the answer and fires this.
+  const BANNED = "This account has been banned or suspended, so it can't be used right now. If you think this is a mistake, please contact the site owner.";
+  window.addEventListener("agent1102:banned", (e) => {
+    if (!userToken) return; // on the sign-in screen the sign-in itself shows the reason
+    const message = (e.detail && e.detail.message) || BANNED;
+    showAuth();
+    setMode("signin");
+    setAuthMessage(message);
+  });
+  // While signed in, ask the server every minute (and when you come back to the tab) whether this account is still allowed. That is
+  // what signs a banned person out even if they are just sitting on the page.
+  function checkStillAllowed() {
+    if (!userToken || document.visibilityState === "hidden") return;
+    fetch(`${BACKEND_URL}/auth/session`, { headers: { "Authorization": `Bearer ${userToken}` } }).catch(() => { /* offline: try again next time */ });
+  }
+  setInterval(checkStillAllowed, 60 * 1000);
+
   // Background tabs throttle timers, so also top the token up when you come back to the tab
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && userToken && tokenSecondsLeft(userToken) < 300) refreshToken();
+    if (document.visibilityState === "visible") checkStillAllowed();
   });
 
   // Keep several open tabs in step: a refresh, sign-in or sign-out in one tab applies to the others
@@ -114,6 +133,53 @@
     method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "Authorization": `Bearer ${token}` } : {}) }, body: JSON.stringify(body),
   });
 
+  // Signed in (with a password, or with the code from the sign-up email): keep the login and open the app
+  function completeSignIn(data, name) {
+    setAuthMessage("");
+    agent1102Session.begin(authStay.checked); // remember whether this login should survive closing the browser
+    userToken = data.session.access_token;
+    localStorage.setItem("agent1102_token", userToken);
+    localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
+    localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
+    setDisplayName(localStorage.getItem("agent1102_name")); // the name on the sidebar's Settings button
+    hidePasswords();
+    showApp();
+  }
+
+  // The 6-digit code from a sign-up or "forgot password" email, in the full-screen code window (js/codedialog.js). The link in the
+  // same email still works: whichever the person uses first. "signup" signs them in; "recovery" goes on to choosing a new password.
+  async function openEmailCode(email, type) {
+    const signup = type === "signup";
+    const outcome = await agent1102CodeDialog.open({
+      title: signup ? "Confirm your email" : "Check your email",
+      email,
+      note: "If the email has a link instead of a code, open the link. Can't find it? Check your spam folder.",
+      resend: async () => {
+        const res = await postJson(signup ? "/auth/resend" : "/auth/forgot", { email });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) throw new Error(data.error || "I couldn't send a new code. Please try again in a moment.");
+      },
+      verify: async (code) => {
+        let res;
+        try { res = await postJson("/auth/verify-code", { email, code, type }); } catch (_) { throw new Error(NO_SERVER); }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error || !data.session) {
+          const err = new Error(data.error || "That code isn't right, or it has expired. Check your newest email, or ask for a new code.");
+          if (data.code === "user_banned") err.closeDialog = true; // nothing more to try: close and show the reason
+          throw err;
+        }
+        return data;
+      },
+    });
+    if (!outcome.ok) { if (outcome.error) setAuthMessage(outcome.error.message); return; }
+    const { session, user } = outcome.result;
+    if (signup) return completeSignIn({ session, user }, "");
+    // a reset code was accepted: the same thing the reset-password link does (this tab only, and only to set the new password)
+    sessionStorage.setItem("agent1102_recovery", JSON.stringify({ a: session.access_token, r: session.refresh_token }));
+    setMode("reset");
+    setAuthMessage("Code accepted. Now choose a new password.", true);
+  }
+
   async function submitAuth() {
     if (mode === "forgot") return submitForgot();
     if (mode === "reset") return submitReset();
@@ -133,20 +199,18 @@
       if (!data.session) {
         // Supabase's "Confirm email" setting is on: the account was created but
         // needs email confirmation before it gets a session.
-        if (data.needsConfirmation) { setAuthMessage(`Almost there! I sent a confirmation link to ${email}. Open it and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true); authResend.hidden = false; }
-        else setAuthMessage("I couldn't sign you in. Please try again.");
+        if (data.needsConfirmation) {
+          setAuthMessage(`Almost there! I sent a confirmation email to ${email}. Enter the 6-digit code from it (or open the link in it) and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true);
+          authResend.hidden = false;
+          resetAuthButton();
+          openEmailCode(email, "signup");
+          return;
+        }
+        setAuthMessage("I couldn't sign you in. Please try again.");
         resetAuthButton();
         return;
       }
-      setAuthMessage("");
-      agent1102Session.begin(authStay.checked); // remember whether this login should survive closing the browser
-      userToken = data.session.access_token;
-      localStorage.setItem("agent1102_token", userToken);
-      localStorage.setItem("agent1102_refresh_token", data.session.refresh_token);
-      localStorage.setItem("agent1102_name", data.user?.user_metadata?.name || name || "");
-      setDisplayName(localStorage.getItem("agent1102_name")); // the name on the sidebar's Settings button
-      hidePasswords();
-      showApp();
+      completeSignIn(data, name);
     } catch (err) {
       console.error("Sign-in request failed:", err);
       setAuthMessage(NO_SERVER);
@@ -162,7 +226,7 @@
     try {
       const data = await (await postJson("/auth/forgot", { email })).json().catch(() => ({}));
       if (data.error) setAuthMessage(data.error);
-      else setAuthMessage(data.message || "If there's an account for that email, I've sent it a message.", true);
+      else { setAuthMessage(data.message || "If there's an account for that email, I've sent it a message.", true); resetAuthButton(); openEmailCode(email, "recovery"); return; }
     } catch { setAuthMessage(NO_SERVER); }
     resetAuthButton();
   }
@@ -175,7 +239,7 @@
     try {
       const data = await (await postJson("/auth/resend", { email })).json().catch(() => ({}));
       if (data.error) setAuthMessage(data.error);
-      else setAuthMessage(data.message || "I've sent it again.", true);
+      else { setAuthMessage(data.message || "I've sent it again.", true); openEmailCode(email, "signup"); }
     } catch { setAuthMessage(NO_SERVER); }
     setTimeout(() => { authResend.disabled = false; }, 30000); // no hammering the button
   }
@@ -225,6 +289,8 @@
   }
 
   function showAuth() {
+    agent1102CodeDialog.close();         // no code window left open over the sign-in screen
+    agent1102CodeDialog.clearVerified(); // and a code accepted in this session doesn't carry over to the next person
     appEl.style.display = "none";
     authScreen.style.display = "flex";
     userToken = null;
@@ -249,6 +315,7 @@
     email_changed: ["Your email address was changed.", "ok"],
     email_pending: ["One more step: open the link I sent to your OTHER address too, and the change will go through.", "info"],
     link_invalid: [LINK_EXPIRED, "error"],
+    banned: [BANNED, "error", true], // a Discord / GitHub sign-in for a banned account (true: no "resend the email" button)
   };
   const returningFromResetLink = new URLSearchParams(window.location.search).get("reset") === "1";
 
@@ -271,9 +338,9 @@
     const notice = NOTICES[params.get("notice")];
     if (notice) {
       clean("notice");
-      const [text, kind] = notice;
+      const [text, kind, noResend] = notice;
       if (userToken) showToast(agent1102Render.escapeHtml(text));
-      else { if (kind === "error") { setMode("signin"); authResend.hidden = false; } setAuthMessage(text, kind !== "error"); }
+      else { if (kind === "error") { setMode("signin"); authResend.hidden = !!noResend; } setAuthMessage(text, kind !== "error"); }
     }
   });
 
