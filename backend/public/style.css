@@ -440,8 +440,9 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
    ============================================================ */
 
 /* Keep bars clear of phone notches / home indicator (needs viewport-fit=cover in index.html) */
-/* even space above and below: on a phone with a notch the extra gap goes UNDER the notch area, so the title isn't squeezed against it */
-header { padding:calc(env(safe-area-inset-top, 0px) + 0.7rem) max(1rem, env(safe-area-inset-right)) 0.7rem max(1rem, env(safe-area-inset-left)); }
+/* The bar is exactly as tall as it has always been (about 87px: padding + title band + gap + the 34px button row); the title just uses more of it.
+   Same space above and below; on a phone with a notch the top gap goes UNDER the notch area, so the title isn't squeezed against it. */
+header { padding:calc(env(safe-area-inset-top, 0px) + 0.5rem) max(1rem, env(safe-area-inset-right)) 0.5rem max(1rem, env(safe-area-inset-left)); }
 #input-area { padding:1rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
 #chat { padding-left:max(1rem, env(safe-area-inset-left)); padding-right:max(1rem, env(safe-area-inset-right)); }
 
@@ -454,11 +455,13 @@ header { padding:calc(env(safe-area-inset-top, 0px) + 0.7rem) max(1rem, env(safe
    screen can't fit them all.
    ============================================================ */
 header {
-  display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right";
-  align-items:center; row-gap:0.35rem; column-gap:0.5rem;
+  --title-h:2.15rem; /* the title's band across the top of the bar */
+  display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right"; grid-template-rows:var(--title-h) auto;
+  align-items:center; row-gap:0.15rem; column-gap:0.5rem;
 }
-/* a big title, so the header is filled from top to bottom. line-height and padding keep the letters (g, the gradient edge) from being clipped */
-header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; font-size:clamp(1.65rem, 5.6vw, 2.2rem); line-height:1.2; padding:0.04em 0.12em; }
+/* The title fills its band: the line box is exactly the band's height and the font is sized so the capitals sit in the middle of it and the tail of the "g" still fits
+   (so the gradient text isn't clipped). */
+header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; font-size:calc(var(--title-h) * 0.82); line-height:var(--title-h); padding:0 0.12em; }
 header > div:not(.header-btns) { grid-area:left; }
 header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify-content:flex-end; }
 

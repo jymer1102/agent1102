@@ -51,13 +51,24 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     assert(dino && dino.style.display !== "none");
   }));
 
-  await t("the header title is large and the header has even space above and below it", () => {
+  await t("the header title fills its band, and the bar is exactly as tall as it always was", () => {
+    const px = (v, unit) => unit === "rem" ? v * 16 : v;
+    const head = CSS.match(/\nheader \{\n  --title-h:([\d.]+)rem;[^}]*\}/);
+    assert(head, "the header grid rule");
+    const band = Number(head[1]), gap = Number(/row-gap:([\d.]+)rem/.exec(head[0])[1]);
+    const pad = /\nheader \{ padding:calc\(env\(safe-area-inset-top, 0px\) \+ ([\d.]+)rem\) [^;]* ([\d.]+)rem max\(/.exec(CSS);
+    assert(pad && pad[1] === pad[2], "the same space above and below: " + (pad && pad[0]));
     const title = CSS.match(/header \.header-title \{[^}]*\}/g).pop();
-    const m = /font-size:clamp\(([\d.]+)rem,\s*[\d.]+vw,\s*([\d.]+)rem\)/.exec(title);
-    assert(m && Number(m[1]) >= 1.5 && Number(m[2]) >= 2, "a big title on phones and computers: " + title);
-    assert(/line-height:1\.2/.test(title) && /padding:0\.04em 0\.12em/.test(title), "room for descenders so the gradient text isn't clipped");
-    const pad = CSS.match(/\nheader \{ padding:([^;]*);/g).pop();
-    assert(/calc\(env\(safe-area-inset-top, 0px\) \+ 0\.7rem\)[^;]* 0\.7rem max\(/.test(pad), "the same 0.7rem above (below any phone notch) and below: " + pad);
+    assert(/font-size:calc\(var\(--title-h\) \* 0\.82\)/.test(title) && /line-height:var\(--title-h\)/.test(title), "the title is sized from its band: " + title);
+    assert(/grid-template-rows:var\(--title-h\) auto/.test(head[0]));
+    // the bar before this change: padding 0.75rem x2, a title line of 1.1rem Space Grotesk (line height 1.276), a 0.4rem gap, then the button row
+    const originalBar = (button) => 2 * 12 + 17.6 * 1.276 + 6.4 + button;
+    const newBar = (button) => 2 * px(Number(pad[1]), "rem") + px(band, "rem") + px(gap, "rem") + button;
+    for (const [where, button] of [["computers", 34], ["phones", 30]]) {
+      assert(Math.abs(newBar(button) - originalBar(button)) <= 0.5, `${where}: bar is ${newBar(button).toFixed(1)}px, it was ${originalBar(button).toFixed(1)}px`);
+    }
+    const titleFont = px(band, "rem") * 0.82;
+    assert(titleFont >= 26, "a title about 60% bigger than before (17.6px): " + titleFont.toFixed(1) + "px");
   });
 
   console.log("\ntext on red buttons: dark-theme dark colour in dark mode, white in light mode");
@@ -118,7 +129,8 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     const bars = [...app.$("#mic-viz").children];
     assert(bars.every(b => /scaleY/.test(b.style.transform)), "bars are animated");
     assert(Math.max(...bars.map(scale)) > 0.2, "bars rise while you speak");
-    assert(scale(bars[15]) > scale(bars[0]), "the middle is taller than the ends");
+    const avg = list => list.reduce((a, b) => a + scale(b), 0) / list.length;
+    assert(avg(bars.slice(12, 20)) > avg([...bars.slice(0, 6), ...bars.slice(-6)]), "the middle is taller than the ends (on average: single bars wobble)");
     rec.onspeechend();
     rec.onresult({ results: [[{ transcript: "hello world" }]] });
     assert(!row.classList.contains("listening") && !viz.active && !app.$("#mic-btn").classList.contains("recording"));
