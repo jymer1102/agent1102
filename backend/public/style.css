@@ -440,7 +440,8 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
    ============================================================ */
 
 /* Keep bars clear of phone notches / home indicator (needs viewport-fit=cover in index.html) */
-header { padding:max(0.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left)); }
+/* even space above and below: on a phone with a notch the extra gap goes UNDER the notch area, so the title isn't squeezed against it */
+header { padding:calc(env(safe-area-inset-top, 0px) + 0.7rem) max(1rem, env(safe-area-inset-right)) 0.7rem max(1rem, env(safe-area-inset-left)); }
 #input-area { padding:1rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
 #chat { padding-left:max(1rem, env(safe-area-inset-left)); padding-right:max(1rem, env(safe-area-inset-right)); }
 
@@ -454,9 +455,10 @@ header { padding:max(0.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-
    ============================================================ */
 header {
   display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right";
-  align-items:center; row-gap:0.4rem; column-gap:0.5rem;
+  align-items:center; row-gap:0.35rem; column-gap:0.5rem;
 }
-header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; }
+/* a big title, so the header is filled from top to bottom. line-height and padding keep the letters (g, the gradient edge) from being clipped */
+header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; font-size:clamp(1.65rem, 5.6vw, 2.2rem); line-height:1.2; padding:0.04em 0.12em; }
 header > div:not(.header-btns) { grid-area:left; }
 header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify-content:flex-end; }
 

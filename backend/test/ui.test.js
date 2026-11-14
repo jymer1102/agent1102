@@ -51,6 +51,15 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     assert(dino && dino.style.display !== "none");
   }));
 
+  await t("the header title is large and the header has even space above and below it", () => {
+    const title = CSS.match(/header \.header-title \{[^}]*\}/g).pop();
+    const m = /font-size:clamp\(([\d.]+)rem,\s*[\d.]+vw,\s*([\d.]+)rem\)/.exec(title);
+    assert(m && Number(m[1]) >= 1.5 && Number(m[2]) >= 2, "a big title on phones and computers: " + title);
+    assert(/line-height:1\.2/.test(title) && /padding:0\.04em 0\.12em/.test(title), "room for descenders so the gradient text isn't clipped");
+    const pad = CSS.match(/\nheader \{ padding:([^;]*);/g).pop();
+    assert(/calc\(env\(safe-area-inset-top, 0px\) \+ 0\.7rem\)[^;]* 0\.7rem max\(/.test(pad), "the same 0.7rem above (below any phone notch) and below: " + pad);
+  });
+
   console.log("\ntext on red buttons: dark-theme dark colour in dark mode, white in light mode");
   await t("--on-danger is the dark theme's dark colour by default and white under .light", () => {
     assert(/--on-danger:#0a0a0c/.test(rule(":root")));
@@ -154,6 +163,49 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     const bars = [...app.$("#mic-viz").children], quiet = Math.max(...bars.map(scale));
     rec.onspeechstart(); await app.sleep(500);
     assert(Math.max(...bars.map(scale)) > quiet + 0.1, "bars swell while speech is detected");
+    rec.onend();
+  }));
+  const phoneMode = app => { app.w.matchMedia = q => ({ matches: /pointer:\s*coarse/.test(q), media: q, addEventListener() {}, removeEventListener() {} }); };
+  const partial = text => { const r = [{ transcript: text }]; r.isFinal = false; return { results: [r] }; };
+  const finalResult = text => { const r = [{ transcript: text }]; r.isFinal = true; return { results: [r] }; };
+  await t("on a phone the bars are never flat while listening, even if the phone sends no speech events at all", () => withApp({ pre: fakeRecognition }, async app => {
+    phoneMode(app); const rec = app.w.__recs[0];
+    app.$("#mic-btn").click(); rec.onstart(); await app.sleep(400);
+    const bars = [...app.$("#mic-viz").children], levels = bars.map(scale);
+    assert(Math.max(...levels) > 0.14, "taller than the 10% floor: " + Math.max(...levels).toFixed(3));
+    assert(new Set(levels.map(l => l.toFixed(2))).size > 6, "bars differ from each other, so it looks alive");
+    const first = levels.join(); await app.sleep(250);
+    assert.notStrictEqual(bars.map(scale).join(), first, "and they keep moving");
+    rec.onend();
+  }));
+  await t("partial results (words heard while still talking) pulse the bars on a phone without ending the dictation or touching the text", () => withApp({ pre: fakeRecognition }, async app => {
+    phoneMode(app); const rec = app.w.__recs[0], viz = app.w.agent1102VoiceViz;
+    assert.strictEqual(rec.interimResults, true, "partial results are switched on");
+    app.$("#input").value = "typed before";
+    app.$("#mic-btn").click(); rec.onstart(); await app.sleep(300);
+    const bars = [...app.$("#mic-viz").children], idle = Math.max(...bars.map(scale));
+    rec.onresult(partial("hel")); await app.sleep(60);
+    assert(Math.max(...bars.map(scale)) > idle + 0.15, "the bars jumped when words arrived");
+    assert(viz.active && app.$("#bottom-row").classList.contains("listening") && app.$("#mic-btn").classList.contains("recording"), "still listening");
+    assert.strictEqual(app.$("#input").value, "typed before", "the text isn't replaced by a half-heard sentence");
+    await app.sleep(1200); const calmer = Math.max(...bars.map(scale));
+    assert(calmer < idle + 0.12 || calmer < 0.6, "and they settle again when it goes quiet: " + calmer.toFixed(2));
+    rec.onresult(partial("hello wor")); rec.onresult(finalResult("hello world")); // the final text ends it as before
+    assert(!viz.active && !app.$("#bottom-row").classList.contains("listening")); assert.strictEqual(app.$("#input").value, "hello world");
+  }));
+  await t("if a phone says sound started but never says it stopped, the bars calm down by themselves after about two seconds", () => withApp({ pre: fakeRecognition }, async app => {
+    phoneMode(app); const rec = app.w.__recs[0];
+    app.$("#mic-btn").click(); rec.onstart(); rec.onsoundstart(); await app.sleep(500);
+    const bars = [...app.$("#mic-viz").children]; assert(Math.max(...bars.map(scale)) > 0.5, "swollen at first");
+    await app.sleep(2300); assert(Math.max(...bars.map(scale)) < 0.5, "settled with no stop event: " + Math.max(...bars.map(scale)).toFixed(2));
+    rec.onend();
+  }));
+  await t("sound start / end events also drive the bars (some phones send these instead of speech start / end)", () => withApp({ pre: fakeRecognition }, async app => {
+    phoneMode(app); const rec = app.w.__recs[0];
+    app.$("#mic-btn").click(); rec.onstart(); rec.onaudiostart(); await app.sleep(300);
+    const bars = [...app.$("#mic-viz").children], quiet = Math.max(...bars.map(scale));
+    rec.onsoundstart(); await app.sleep(500); assert(Math.max(...bars.map(scale)) > quiet + 0.2, "swelled on sound");
+    rec.onsoundend(); await app.sleep(900); assert(Math.max(...bars.map(scale)) < 0.5, "settled after the sound ended");
     rec.onend();
   }));
   await t("if the microphone is blocked the bars still run (animated version)", () => withApp({ pre: fakeRecognition }, async app => {

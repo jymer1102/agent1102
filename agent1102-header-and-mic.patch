@@ -1,0 +1,242 @@
+diff --git a/backend/public/index.html b/backend/public/index.html
+index 03e022a..8138175 100644
+--- a/backend/public/index.html
++++ b/backend/public/index.html
+@@ -44,7 +44,7 @@
+ 
+   <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
+   <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
+-  <link rel="stylesheet" href="style.css?v=20261112a" />
++  <link rel="stylesheet" href="style.css?v=20261114a" />
+ </head>
+ 
+ <body>
+@@ -295,8 +295,8 @@
+ <script src="js/settings.js?v=20261112a"></script>
+ <script src="js/ui.js?v=20261111a"></script>
+ <script src="js/sendstate.js?v=20261020a"></script>
+-<script src="js/voice-viz.js?v=20261111a"></script>
+-<script src="js/chat.js?v=20261111a"></script>
++<script src="js/voice-viz.js?v=20261114a"></script>
++<script src="js/chat.js?v=20261114a"></script>
+ <script src="js/tables.js?v=20261029a"></script>
+ <script src="js/easter-eggs.js?v=20261030a"></script>
+ <script src="js/glow.js?v=20261018d"></script>
+diff --git a/backend/public/js/chat.js b/backend/public/js/chat.js
+index 0d85538..cfb871b 100644
+--- a/backend/public/js/chat.js
++++ b/backend/public/js/chat.js
+@@ -499,15 +499,20 @@ document.addEventListener("DOMContentLoaded", () => {
+     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+     recognition = new SR();
+     recognition.continuous = false;
+-    recognition.interimResults = false;
++    recognition.interimResults = true; // partial results arrive as you talk: they make the visualizer move on phones (the text is only used once it is final)
+     recognition.lang = "en-US";
+     
+     // The bars inside the message box (js/voice-viz.js) show while the microphone is listening
+     const vizStart = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.start(); };
+     const vizStop = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.stop(); };
+     const vizSpeaking = on => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.setSpeaking(on); };
++    const vizPulse = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.pulse(); };
++    // phones send few of these, so every one counts
++    recognition.onaudiostart = () => vizSpeaking(false);
++    recognition.onsoundstart = () => vizSpeaking(true);
+     recognition.onspeechstart = () => vizSpeaking(true);
+     recognition.onspeechend = () => vizSpeaking(false);
++    recognition.onsoundend = () => vizSpeaking(false);
+ 
+     recognition.onstart = () => {
+       micBtn.classList.add("recording");
+@@ -517,6 +522,9 @@ document.addEventListener("DOMContentLoaded", () => {
+     };
+     
+     recognition.onresult = (e) => {
++      // still talking: more words were heard, but this is not the final text yet
++      const latest = e.results && e.results[e.results.length - 1];
++      if (latest && latest.isFinal === false) { vizPulse(); return; }
+       const inputEl = document.getElementById("input");
+       if (e.results && e.results.length > 0 && inputEl) {
+         const transcript = e.results[e.results.length - 1][0].transcript;
+diff --git a/backend/public/js/voice-viz.js b/backend/public/js/voice-viz.js
+index c94ae69..4eb1bc2 100644
+--- a/backend/public/js/voice-viz.js
++++ b/backend/public/js/voice-viz.js
+@@ -5,10 +5,12 @@
+ //
+ //  Two ways of driving the bars:
+ //   - "mic": the real microphone level, read with the Web Audio API (desktop browsers).
+-//   - "sim": a calm animation that swells while the speech recognizer reports that you are talking.
++//   - "sim": a gently moving animation that swells whenever the speech recognizer reports sound: it
++//     is told when sound starts and stops, and gets a pulse each time it hears more words (pulse()).
+ //     Used on phones and tablets, where the browser's speech recognizer and a second microphone
+ //     stream can fight over the one microphone (the recognizer then stops listening), and also on
+-//     any device where the extra microphone stream can't be opened.
++//     any device where the extra microphone stream can't be opened. Phones send very few events, so
++//     this mode always keeps visibly moving, and the bars never sit flat.
+ // ============================================================
+ (function () {
+   "use strict";
+@@ -41,6 +43,10 @@
+   let mode = "sim";
+   let speaking = false;
+   let speakAmt = 0;         // eases towards 1 while speaking
++  let burst = 0;            // set to 1 by pulse() (more words heard), fades away in about half a second
++  let speakStamp = 0;       // when speaking was last switched on or refreshed: a phone may never say that the sound stopped, so it expires
++  const SPEAKING_EXPIRES_MS = 2000;
++  let lastFrame = 0;
+   let stream = null, audioCtx = null, analyser = null, freq = null;
+   const levels = new Array(BARS).fill(0);
+ 
+@@ -97,14 +103,21 @@
+ 
+   function targetsFromSim(now) {
+     const t = now / 1000;
+-    speakAmt += ((speaking ? 1 : 0) - speakAmt) * 0.08;
+-    const base = 0.07 + 0.5 * speakAmt;
++    const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0.016;
++    lastFrame = now;
++    if (speaking && performance.now() - speakStamp > SPEAKING_EXPIRES_MS) speaking = false; // no news for two seconds: it has gone quiet
++    speakAmt += ((speaking ? 1 : 0) - speakAmt) * Math.min(1, dt * 8);
++    burst *= Math.pow(0.5, dt / 0.25); // halves every quarter of a second
++    const energy = Math.max(speakAmt, burst); // 0 = quiet, 1 = talking
+     return levels.map((_, i) => {
+       const k = edgeDistance(i);
+-      if (reducedMotion()) return base * (1 - 0.5 * k); // still, just taller while you speak
++      const shape = 1 - 0.4 * k; // taller in the middle
++      if (reducedMotion()) return (0.16 + 0.6 * energy) * shape; // still, just taller while you speak
+       const wave = 0.5 + 0.5 * Math.sin(t * (2.1 + i * 0.29) + i * 1.7);
+       const wave2 = 0.5 + 0.5 * Math.sin(t * (3.3 + i * 0.17) + i * 0.6);
+-      return base * (0.3 + 0.7 * (0.6 * wave + 0.4 * wave2)) * (1 - 0.45 * k) * (speakAmt > 0.2 ? 1.35 : 1);
++      const idle = 0.1 + 0.16 * wave; // always moving, so it is clearly alive even when no events arrive (phones)
++      const talking = energy * (0.3 + 0.65 * (0.55 * wave2 + 0.45 * wave));
++      return (idle + talking) * shape;
+     });
+   }
+ 
+@@ -128,6 +141,8 @@
+     mode = "sim";
+     speaking = false;
+     speakAmt = 0;
++    burst = 0;
++    lastFrame = 0;
+     levels.fill(0);
+     row.classList.add("listening");
+     viz.setAttribute("aria-hidden", "false");
+@@ -144,13 +159,17 @@
+     closeMic();
+     mode = "sim";
+     speaking = false;
++    burst = 0;
+     row.classList.remove("listening");
+     viz.setAttribute("aria-hidden", "true");
+     bars.forEach(b => { b.style.transform = ""; });
+   }
+ 
+-  function setSpeaking(on) { speaking = !!on; }
++  function setSpeaking(on) { speaking = !!on; speakStamp = performance.now(); }
++  // the recognizer just heard more words: swell the bars for a moment (only the animated mode needs this). It also counts as
++  // news that there is still sound, so a "speaking" state that never got its "stopped" event is kept alive only while words keep coming.
++  function pulse() { burst = 1; speakStamp = performance.now(); }
+ 
+   viz.setAttribute("aria-hidden", "true");
+-  window.agent1102VoiceViz = { start, stop, setSpeaking, get active() { return running; }, get mode() { return mode; } };
++  window.agent1102VoiceViz = { start, stop, setSpeaking, pulse, get active() { return running; }, get mode() { return mode; } };
+ })();
+diff --git a/backend/public/style.css b/backend/public/style.css
+index 04184b9..50d45a6 100644
+--- a/backend/public/style.css
++++ b/backend/public/style.css
+@@ -440,7 +440,8 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
+    ============================================================ */
+ 
+ /* Keep bars clear of phone notches / home indicator (needs viewport-fit=cover in index.html) */
+-header { padding:max(0.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left)); }
++/* even space above and below: on a phone with a notch the extra gap goes UNDER the notch area, so the title isn't squeezed against it */
++header { padding:calc(env(safe-area-inset-top, 0px) + 0.7rem) max(1rem, env(safe-area-inset-right)) 0.7rem max(1rem, env(safe-area-inset-left)); }
+ #input-area { padding:1rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
+ #chat { padding-left:max(1rem, env(safe-area-inset-left)); padding-right:max(1rem, env(safe-area-inset-right)); }
+ 
+@@ -454,9 +455,10 @@ header { padding:max(0.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-
+    ============================================================ */
+ header {
+   display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right";
+-  align-items:center; row-gap:0.4rem; column-gap:0.5rem;
++  align-items:center; row-gap:0.35rem; column-gap:0.5rem;
+ }
+-header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; }
++/* a big title, so the header is filled from top to bottom. line-height and padding keep the letters (g, the gradient edge) from being clipped */
++header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; font-size:clamp(1.65rem, 5.6vw, 2.2rem); line-height:1.2; padding:0.04em 0.12em; }
+ header > div:not(.header-btns) { grid-area:left; }
+ header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify-content:flex-end; }
+ 
+diff --git a/backend/test/ui.test.js b/backend/test/ui.test.js
+index 903bd89..c945344 100644
+--- a/backend/test/ui.test.js
++++ b/backend/test/ui.test.js
+@@ -51,6 +51,15 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
+     assert(dino && dino.style.display !== "none");
+   }));
+ 
++  await t("the header title is large and the header has even space above and below it", () => {
++    const title = CSS.match(/header \.header-title \{[^}]*\}/g).pop();
++    const m = /font-size:clamp\(([\d.]+)rem,\s*[\d.]+vw,\s*([\d.]+)rem\)/.exec(title);
++    assert(m && Number(m[1]) >= 1.5 && Number(m[2]) >= 2, "a big title on phones and computers: " + title);
++    assert(/line-height:1\.2/.test(title) && /padding:0\.04em 0\.12em/.test(title), "room for descenders so the gradient text isn't clipped");
++    const pad = CSS.match(/\nheader \{ padding:([^;]*);/g).pop();
++    assert(/calc\(env\(safe-area-inset-top, 0px\) \+ 0\.7rem\)[^;]* 0\.7rem max\(/.test(pad), "the same 0.7rem above (below any phone notch) and below: " + pad);
++  });
++
+   console.log("\ntext on red buttons: dark-theme dark colour in dark mode, white in light mode");
+   await t("--on-danger is the dark theme's dark colour by default and white under .light", () => {
+     assert(/--on-danger:#0a0a0c/.test(rule(":root")));
+@@ -156,6 +165,49 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
+     assert(Math.max(...bars.map(scale)) > quiet + 0.1, "bars swell while speech is detected");
+     rec.onend();
+   }));
++  const phoneMode = app => { app.w.matchMedia = q => ({ matches: /pointer:\s*coarse/.test(q), media: q, addEventListener() {}, removeEventListener() {} }); };
++  const partial = text => { const r = [{ transcript: text }]; r.isFinal = false; return { results: [r] }; };
++  const finalResult = text => { const r = [{ transcript: text }]; r.isFinal = true; return { results: [r] }; };
++  await t("on a phone the bars are never flat while listening, even if the phone sends no speech events at all", () => withApp({ pre: fakeRecognition }, async app => {
++    phoneMode(app); const rec = app.w.__recs[0];
++    app.$("#mic-btn").click(); rec.onstart(); await app.sleep(400);
++    const bars = [...app.$("#mic-viz").children], levels = bars.map(scale);
++    assert(Math.max(...levels) > 0.14, "taller than the 10% floor: " + Math.max(...levels).toFixed(3));
++    assert(new Set(levels.map(l => l.toFixed(2))).size > 6, "bars differ from each other, so it looks alive");
++    const first = levels.join(); await app.sleep(250);
++    assert.notStrictEqual(bars.map(scale).join(), first, "and they keep moving");
++    rec.onend();
++  }));
++  await t("partial results (words heard while still talking) pulse the bars on a phone without ending the dictation or touching the text", () => withApp({ pre: fakeRecognition }, async app => {
++    phoneMode(app); const rec = app.w.__recs[0], viz = app.w.agent1102VoiceViz;
++    assert.strictEqual(rec.interimResults, true, "partial results are switched on");
++    app.$("#input").value = "typed before";
++    app.$("#mic-btn").click(); rec.onstart(); await app.sleep(300);
++    const bars = [...app.$("#mic-viz").children], idle = Math.max(...bars.map(scale));
++    rec.onresult(partial("hel")); await app.sleep(60);
++    assert(Math.max(...bars.map(scale)) > idle + 0.15, "the bars jumped when words arrived");
++    assert(viz.active && app.$("#bottom-row").classList.contains("listening") && app.$("#mic-btn").classList.contains("recording"), "still listening");
++    assert.strictEqual(app.$("#input").value, "typed before", "the text isn't replaced by a half-heard sentence");
++    await app.sleep(1200); const calmer = Math.max(...bars.map(scale));
++    assert(calmer < idle + 0.12 || calmer < 0.6, "and they settle again when it goes quiet: " + calmer.toFixed(2));
++    rec.onresult(partial("hello wor")); rec.onresult(finalResult("hello world")); // the final text ends it as before
++    assert(!viz.active && !app.$("#bottom-row").classList.contains("listening")); assert.strictEqual(app.$("#input").value, "hello world");
++  }));
++  await t("if a phone says sound started but never says it stopped, the bars calm down by themselves after about two seconds", () => withApp({ pre: fakeRecognition }, async app => {
++    phoneMode(app); const rec = app.w.__recs[0];
++    app.$("#mic-btn").click(); rec.onstart(); rec.onsoundstart(); await app.sleep(500);
++    const bars = [...app.$("#mic-viz").children]; assert(Math.max(...bars.map(scale)) > 0.5, "swollen at first");
++    await app.sleep(2300); assert(Math.max(...bars.map(scale)) < 0.5, "settled with no stop event: " + Math.max(...bars.map(scale)).toFixed(2));
++    rec.onend();
++  }));
++  await t("sound start / end events also drive the bars (some phones send these instead of speech start / end)", () => withApp({ pre: fakeRecognition }, async app => {
++    phoneMode(app); const rec = app.w.__recs[0];
++    app.$("#mic-btn").click(); rec.onstart(); rec.onaudiostart(); await app.sleep(300);
++    const bars = [...app.$("#mic-viz").children], quiet = Math.max(...bars.map(scale));
++    rec.onsoundstart(); await app.sleep(500); assert(Math.max(...bars.map(scale)) > quiet + 0.2, "swelled on sound");
++    rec.onsoundend(); await app.sleep(900); assert(Math.max(...bars.map(scale)) < 0.5, "settled after the sound ended");
++    rec.onend();
++  }));
+   await t("if the microphone is blocked the bars still run (animated version)", () => withApp({ pre: fakeRecognition }, async app => {
+     fakeAudio(app.w, 255);
+     app.w.navigator.mediaDevices.getUserMedia = async () => { throw new Error("denied"); };

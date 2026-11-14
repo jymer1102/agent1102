@@ -499,15 +499,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SR();
     recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.interimResults = true; // partial results arrive as you talk: they make the visualizer move on phones (the text is only used once it is final)
     recognition.lang = "en-US";
     
     // The bars inside the message box (js/voice-viz.js) show while the microphone is listening
     const vizStart = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.start(); };
     const vizStop = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.stop(); };
     const vizSpeaking = on => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.setSpeaking(on); };
+    const vizPulse = () => { if (window.agent1102VoiceViz) window.agent1102VoiceViz.pulse(); };
+    // phones send few of these, so every one counts
+    recognition.onaudiostart = () => vizSpeaking(false);
+    recognition.onsoundstart = () => vizSpeaking(true);
     recognition.onspeechstart = () => vizSpeaking(true);
     recognition.onspeechend = () => vizSpeaking(false);
+    recognition.onsoundend = () => vizSpeaking(false);
 
     recognition.onstart = () => {
       micBtn.classList.add("recording");
@@ -517,6 +522,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     
     recognition.onresult = (e) => {
+      // still talking: more words were heard, but this is not the final text yet
+      const latest = e.results && e.results[e.results.length - 1];
+      if (latest && latest.isFinal === false) { vizPulse(); return; }
       const inputEl = document.getElementById("input");
       if (e.results && e.results.length > 0 && inputEl) {
         const transcript = e.results[e.results.length - 1][0].transcript;

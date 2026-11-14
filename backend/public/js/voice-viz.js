@@ -5,10 +5,12 @@
 //
 //  Two ways of driving the bars:
 //   - "mic": the real microphone level, read with the Web Audio API (desktop browsers).
-//   - "sim": a calm animation that swells while the speech recognizer reports that you are talking.
+//   - "sim": a gently moving animation that swells whenever the speech recognizer reports sound: it
+//     is told when sound starts and stops, and gets a pulse each time it hears more words (pulse()).
 //     Used on phones and tablets, where the browser's speech recognizer and a second microphone
 //     stream can fight over the one microphone (the recognizer then stops listening), and also on
-//     any device where the extra microphone stream can't be opened.
+//     any device where the extra microphone stream can't be opened. Phones send very few events, so
+//     this mode always keeps visibly moving, and the bars never sit flat.
 // ============================================================
 (function () {
   "use strict";
@@ -41,6 +43,10 @@
   let mode = "sim";
   let speaking = false;
   let speakAmt = 0;         // eases towards 1 while speaking
+  let burst = 0;            // set to 1 by pulse() (more words heard), fades away in about half a second
+  let speakStamp = 0;       // when speaking was last switched on or refreshed: a phone may never say that the sound stopped, so it expires
+  const SPEAKING_EXPIRES_MS = 2000;
+  let lastFrame = 0;
   let stream = null, audioCtx = null, analyser = null, freq = null;
   const levels = new Array(BARS).fill(0);
 
@@ -97,14 +103,21 @@
 
   function targetsFromSim(now) {
     const t = now / 1000;
-    speakAmt += ((speaking ? 1 : 0) - speakAmt) * 0.08;
-    const base = 0.07 + 0.5 * speakAmt;
+    const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0.016;
+    lastFrame = now;
+    if (speaking && performance.now() - speakStamp > SPEAKING_EXPIRES_MS) speaking = false; // no news for two seconds: it has gone quiet
+    speakAmt += ((speaking ? 1 : 0) - speakAmt) * Math.min(1, dt * 8);
+    burst *= Math.pow(0.5, dt / 0.25); // halves every quarter of a second
+    const energy = Math.max(speakAmt, burst); // 0 = quiet, 1 = talking
     return levels.map((_, i) => {
       const k = edgeDistance(i);
-      if (reducedMotion()) return base * (1 - 0.5 * k); // still, just taller while you speak
+      const shape = 1 - 0.4 * k; // taller in the middle
+      if (reducedMotion()) return (0.16 + 0.6 * energy) * shape; // still, just taller while you speak
       const wave = 0.5 + 0.5 * Math.sin(t * (2.1 + i * 0.29) + i * 1.7);
       const wave2 = 0.5 + 0.5 * Math.sin(t * (3.3 + i * 0.17) + i * 0.6);
-      return base * (0.3 + 0.7 * (0.6 * wave + 0.4 * wave2)) * (1 - 0.45 * k) * (speakAmt > 0.2 ? 1.35 : 1);
+      const idle = 0.1 + 0.16 * wave; // always moving, so it is clearly alive even when no events arrive (phones)
+      const talking = energy * (0.3 + 0.65 * (0.55 * wave2 + 0.45 * wave));
+      return (idle + talking) * shape;
     });
   }
 
@@ -128,6 +141,8 @@
     mode = "sim";
     speaking = false;
     speakAmt = 0;
+    burst = 0;
+    lastFrame = 0;
     levels.fill(0);
     row.classList.add("listening");
     viz.setAttribute("aria-hidden", "false");
@@ -144,13 +159,17 @@
     closeMic();
     mode = "sim";
     speaking = false;
+    burst = 0;
     row.classList.remove("listening");
     viz.setAttribute("aria-hidden", "true");
     bars.forEach(b => { b.style.transform = ""; });
   }
 
-  function setSpeaking(on) { speaking = !!on; }
+  function setSpeaking(on) { speaking = !!on; speakStamp = performance.now(); }
+  // the recognizer just heard more words: swell the bars for a moment (only the animated mode needs this). It also counts as
+  // news that there is still sound, so a "speaking" state that never got its "stopped" event is kept alive only while words keep coming.
+  function pulse() { burst = 1; speakStamp = performance.now(); }
 
   viz.setAttribute("aria-hidden", "true");
-  window.agent1102VoiceViz = { start, stop, setSpeaking, get active() { return running; }, get mode() { return mode; } };
+  window.agent1102VoiceViz = { start, stop, setSpeaking, pulse, get active() { return running; }, get mode() { return mode; } };
 })();
