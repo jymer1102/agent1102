@@ -440,33 +440,32 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
    ============================================================ */
 
 /* Keep bars clear of phone notches / home indicator (needs viewport-fit=cover in index.html) */
-/* The bar is exactly as tall as it has always been (about 87px: padding + title band + gap + the 34px button row); the title just uses more of it.
-   Same space above and below; on a phone with a notch the top gap goes UNDER the notch area, so the title isn't squeezed against it. */
-header { padding:calc(env(safe-area-inset-top, 0px) + 0.5rem) max(1rem, env(safe-area-inset-right)) 0.5rem max(1rem, env(safe-area-inset-left)); }
+/* The bar's padding is the original 0.75rem above and below. (On a phone with a notch the top gap goes UNDER the notch area, so the title isn't squeezed against it.) */
+header { padding:calc(env(safe-area-inset-top, 0px) + 0.75rem) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left)); }
 #input-area { padding:1rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
 #chat { padding-left:max(1rem, env(safe-area-inset-left)); padding-right:max(1rem, env(safe-area-inset-right)); }
 
 /* ============================================================
-   Header: the title sits on its own line above the buttons (all screen sizes)
-   Row 1: title, centered. Its click box is only as wide as the title itself
-          (justify-self:center shrinks it to the letters).
-   Row 2: history/new-chat on the left, everything else on the right.
-   Easter-egg buttons are added to the right group, so it wraps if a tiny
-   screen can't fit them all.
+   Header: one row that fits its buttons evenly
+   The bar hugs the buttons: the same space above and below them (the original 0.75rem), and the buttons keep their own size (34px, 30px on a
+   phone). The title is sized from the buttons too (its line is exactly as tall as a button) so everything in the bar is centered on the same line.
+   Left: history. Middle: the title. Right: the extra buttons. The two side columns are always equal, so the title stays exactly centered and can
+   never run into a button; on a very narrow phone the title gets smaller (it never needs more room than what is left between the side columns).
    ============================================================ */
 header {
-  --title-h:2.15rem; /* the title's band across the top of the bar */
-  display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right"; grid-template-rows:var(--title-h) auto;
-  align-items:center; row-gap:0.15rem; column-gap:0.5rem;
+  --btn:34px; /* the buttons' size, unchanged */
+  display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; column-gap:0.5rem;
 }
-/* The title fills its band: the line box is exactly the band's height and the font is sized so the capitals sit in the middle of it and the tail of the "g" still fits
-   (so the gradient text isn't clipped). */
-header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; font-size:calc(var(--title-h) * 0.82); line-height:var(--title-h); padding:0 0.12em; }
-header > div:not(.header-btns) { grid-area:left; }
-header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify-content:flex-end; }
+header .header-title {
+  grid-column:2; grid-row:1; justify-self:center; align-self:center; max-width:100%; white-space:nowrap; padding:0 0.12em;
+  line-height:var(--btn); /* as tall as a button, so the letters sit on the buttons' centre line */
+  font-size:min(calc(var(--btn) * 0.82), max(1.25rem, calc((100vw - 251px) / 5.04))); /* 251px = the room the history button and 3 extra buttons need, plus a little spare (the title is 5.04 x its font size wide) */
+}
+header > div:not(.header-btns) { grid-column:1; grid-row:1; justify-self:start; }
+header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wrap; justify-content:flex-end; align-content:center; }
 
 @media (max-width:480px) {
-  header { column-gap:0.4rem; }
+  header { --btn:30px; column-gap:0.4rem; }
   header .icon-btn { width:30px!important; height:30px!important; }
   header .header-btns, header > div:not(.header-btns) { gap:0.35rem!important; }
 }
@@ -928,7 +927,7 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 #bottom-row.listening #mic-viz { display:flex; }
 #bottom-row.listening #input { display:none; }
 .mic-viz-bar {
-  flex:0 1 3px; min-width:2px; height:28px; border-radius:3px;
+  flex:1 1 0; max-width:5px; min-width:2px; height:28px; border-radius:3px; /* the bars spread to fill the box, up to 5px each */
   background:linear-gradient(to top, var(--accent), var(--accent-bright));
   transform:scaleY(0.1); transform-origin:center; will-change:transform;
 }
