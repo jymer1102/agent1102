@@ -51,24 +51,26 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     assert(dino && dino.style.display !== "none");
   }));
 
-  await t("the header title fills its band, and the bar is exactly as tall as it always was", () => {
-    const px = (v, unit) => unit === "rem" ? v * 16 : v;
-    const head = CSS.match(/\nheader \{\n  --title-h:([\d.]+)rem;[^}]*\}/);
+  await t("the header is one row that fits its buttons evenly: the same space above and below, the buttons at their own size, the title sized from them", () => {
+    const head = CSS.match(/\nheader \{\n  --btn:(\d+)px;[^}]*\}/);
     assert(head, "the header grid rule");
-    const band = Number(head[1]), gap = Number(/row-gap:([\d.]+)rem/.exec(head[0])[1]);
+    assert(/grid-template-columns:minmax\(0, 1fr\) auto minmax\(0, 1fr\)/.test(head[0]) && /align-items:center/.test(head[0]), "equal side columns, everything centered on one line");
+    assert(!/grid-template-rows/.test(head[0]), "no fixed rows: the bar is only as tall as its content");
+    // the same space above and below: the original 0.75rem each
     const pad = /\nheader \{ padding:calc\(env\(safe-area-inset-top, 0px\) \+ ([\d.]+)rem\) [^;]* ([\d.]+)rem max\(/.exec(CSS);
-    assert(pad && pad[1] === pad[2], "the same space above and below: " + (pad && pad[0]));
+    assert(pad && pad[1] === "0.75" && pad[2] === "0.75", "0.75rem above and below: " + (pad && pad[0]));
+    // the buttons keep the sizes they always had: 34px, and 30px on a phone
+    assert(CSS.match(/\.icon-btn \{[^}]*width:34px;[^}]*height:34px;/), "buttons are 34px");
+    assert(/@media \(max-width:480px\) \{\n  header \{ --btn:30px;[^}]*\}\n  header \.icon-btn \{ width:30px!important; height:30px!important; \}/.test(CSS), "30px on phones, as before");
+    assert(!/header \.header-btns \.icon-btn \{/.test(CSS), "no button is shrunk to make room");
+    // the title: its line is exactly a button tall, in the same row, font sized from that
     const title = CSS.match(/header \.header-title \{[^}]*\}/g).pop();
-    assert(/font-size:calc\(var\(--title-h\) \* 0\.82\)/.test(title) && /line-height:var\(--title-h\)/.test(title), "the title is sized from its band: " + title);
-    assert(/grid-template-rows:var\(--title-h\) auto/.test(head[0]));
-    // the bar before this change: padding 0.75rem x2, a title line of 1.1rem Space Grotesk (line height 1.276), a 0.4rem gap, then the button row
-    const originalBar = (button) => 2 * 12 + 17.6 * 1.276 + 6.4 + button;
-    const newBar = (button) => 2 * px(Number(pad[1]), "rem") + px(band, "rem") + px(gap, "rem") + button;
-    for (const [where, button] of [["computers", 34], ["phones", 30]]) {
-      assert(Math.abs(newBar(button) - originalBar(button)) <= 0.5, `${where}: bar is ${newBar(button).toFixed(1)}px, it was ${originalBar(button).toFixed(1)}px`);
-    }
-    const titleFont = px(band, "rem") * 0.82;
-    assert(titleFont >= 26, "a title about 60% bigger than before (17.6px): " + titleFont.toFixed(1) + "px");
+    assert(/grid-column:2; grid-row:1;/.test(title) && /line-height:var\(--btn\)/.test(title) && /align-self:center/.test(title), "same row and centre line as the buttons: " + title);
+    assert(/font-size:min\(calc\(var\(--btn\) \* 0\.82\)/.test(title), "font follows the button size");
+    assert(/header > div:not\(\.header-btns\) \{ grid-column:1; grid-row:1;/.test(CSS) && /header \.header-btns \{ grid-column:3; grid-row:1;/.test(CSS), "history left, extras right, same row");
+    // measured in a real browser: the bar is 12 + 34 + 12 + the 1px border = 59px (55px on a phone), the old one was 87.4px (83.4px)
+    const barPx = btn => 2 * 12 + btn + 1;
+    assert.strictEqual(barPx(34), 59); assert.strictEqual(barPx(30), 55);
   });
 
   console.log("\ntext on red buttons: dark-theme dark colour in dark mode, white in light mode");
@@ -471,6 +473,12 @@ const scale = bar => parseFloat(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)[1
     D(app).markVerified(); assert(D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), "1");
     D(app).clearVerified(); assert(!D(app).verifiedThisSession()); assert.strictEqual(app.w.sessionStorage.getItem("agent1102_code_verified"), null);
   }));
+  await t("the window's icons are ones the app embeds (reicon.js), so none can come up blank if the Font Awesome CDN doesn't load", () => {
+    const embedded = new Set([...fs.readFileSync(path.join(PUBLIC, "js", "reicon.js"), "utf8").split("var MAP = {")[1].split("\n  };")[0].matchAll(/^\s+"([a-z0-9-]+)":/gm)].map(m => m[1]));
+    const used = [...fs.readFileSync(path.join(PUBLIC, "js", "codedialog.js"), "utf8").matchAll(/fa-([a-z0-9-]+)/g)].map(m => m[1]).filter(n => n !== "solid");
+    assert(used.length >= 2, "found the dialog's icons: " + used);
+    for (const n of used) assert(embedded.has(n), `fa-${n} is not embedded in reicon.js`);
+  });
   await t("the window's styling: solid background, boxes shrink on phones, no shake for people who asked for less motion", () => {
     assert(/background:var\(--bg\)/.test(rule(".code-dialog")) && !/rgba|opacity/.test(rule(".code-dialog")));
     assert(/@media \(prefers-reduced-motion: reduce\) \{ \.code-boxes\.shake \{ animation:none; \} \}/.test(CSS));
