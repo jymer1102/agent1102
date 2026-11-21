@@ -1,4 +1,4 @@
-// Easter egg — background (horizontal / vertical banner)
+// Easter egg — background (background-image.gif; the old horizontal / vertical banners are only a fallback if the GIF is missing)
   // Two separate flags: "unlocked" (the button stays for good once you find it) and
   // "active" (whether the background is currently showing).
   let easterActive = localStorage.getItem("agent1102_easter") === "true";
@@ -9,18 +9,30 @@
   headerBtns.prepend(easterBtn);
 
   // backend/public is the static root, so URLs start at /images/
-  const BG_HORIZONTAL = "/images/jymer1102_horizontal_banner.png";
-  const BG_VERTICAL   = "/images/jymer1102_vertical_banner.png";
+  const BG_GIF        = "/images/background-image.gif";
+  const BG_HORIZONTAL = "/images/jymer1102_horizontal_banner.png"; // fallback only
+  const BG_VERTICAL   = "/images/jymer1102_vertical_banner.png";   // fallback only
   const portraitQuery = window.matchMedia("(orientation: portrait)");
   const bgLayer = document.getElementById("bg-layer"); // blurred in style.css (--bg-blur)
+  // Is the GIF really there? Checked once; if it isn't (not uploaded yet), the old banners are used so the background never goes blank.
+  let gifState = "unknown"; // "ok" | "missing"
+  function probeGif() {
+    if (gifState !== "unknown" || typeof Image !== "function") return;
+    gifState = "checking";
+    const im = new Image();
+    im.onload = () => { gifState = "ok"; if (easterActive) applyEaster(); };
+    im.onerror = () => { gifState = "missing"; if (easterActive) applyEaster(); };
+    im.src = BG_GIF;
+  }
+  const backgroundUrl = () => gifState === "missing" ? (portraitQuery.matches ? BG_VERTICAL : BG_HORIZONTAL) : BG_GIF;
 
   function applyEaster() {
     // style.css reads this: in light mode the reply text turns white while the (dark) picture is behind it
     document.documentElement.classList.toggle("bg-on", !!easterActive);
     document.body.classList.toggle("bg-on", !!easterActive);
     if (easterActive) {
-      const img = portraitQuery.matches ? BG_VERTICAL : BG_HORIZONTAL;
-      bgLayer.style.backgroundImage = `url('${img}')`;
+      probeGif();
+      bgLayer.style.backgroundImage = `url('${backgroundUrl()}')`;
       bgLayer.style.display = "block";
     } else {
       bgLayer.style.display = "none";
