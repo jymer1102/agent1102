@@ -46,13 +46,13 @@
     setMode("signin");
     setAuthMessage(message);
   });
-  // While signed in, ask the server every minute (and when you come back to the tab) whether this account is still allowed. That is
+  // While signed in, ask the server every 20 seconds (and when you come back to the tab) whether this account is still allowed. That is
   // what signs a banned person out even if they are just sitting on the page.
   function checkStillAllowed() {
     if (!userToken || document.visibilityState === "hidden") return;
     fetch(`${BACKEND_URL}/auth/session`, { headers: { "Authorization": `Bearer ${userToken}` } }).catch(() => { /* offline: try again next time */ });
   }
-  setInterval(checkStillAllowed, 60 * 1000);
+  setInterval(checkStillAllowed, 20 * 1000);
 
   // Background tabs throttle timers, so also top the token up when you come back to the tab
   document.addEventListener("visibilitychange", () => {
@@ -146,7 +146,7 @@
     showApp();
   }
 
-  // The 6-digit code from a sign-up or "forgot password" email, in the full-screen code window (js/codedialog.js). The link in the
+  // The emailed code (6 digits, or what the server says) from a sign-up or "forgot password" email, in the full-screen code window (js/codedialog.js). The link in the
   // same email still works: whichever the person uses first. "signup" signs them in; "recovery" goes on to choosing a new password.
   async function openEmailCode(email, type) {
     const signup = type === "signup";
@@ -200,7 +200,7 @@
         // Supabase's "Confirm email" setting is on: the account was created but
         // needs email confirmation before it gets a session.
         if (data.needsConfirmation) {
-          setAuthMessage(`Almost there! I sent a confirmation email to ${email}. Enter the 6-digit code from it (or open the link in it) and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true);
+          setAuthMessage(`Almost there! I sent a confirmation email to ${email}. Enter the ${agent1102CodeDialog.length}-digit code from it (or open the link in it) and you'll be signed in. It can take a minute, and it may land in your spam folder.`, true);
           authResend.hidden = false;
           resetAuthButton();
           openEmailCode(email, "signup");
@@ -284,12 +284,16 @@
     if (!userToken) return; // the refresh was rejected and showAuth() already ran
     loadProfile(); // fetches the saved profile picture; not awaited so the chat isn't held up
     if (typeof loadEasterEggs === "function") loadEasterEggs(); // unlocked easter eggs follow the account; also not awaited
+    if (window.agent1102Admin) agent1102Admin.refresh();               // shows the admin button if (and only if) this account is an admin
+    if (window.agent1102Announcements) agent1102Announcements.start(); // notifications from the site owner
     if (history.length === 0) addGreeting();
     loadChats();
   }
 
   function showAuth() {
     agent1102CodeDialog.close();         // no code window left open over the sign-in screen
+    if (window.agent1102Admin) agent1102Admin.reset();                 // the admin button and window belong to the account that just left
+    if (window.agent1102Announcements) agent1102Announcements.clear();
     agent1102CodeDialog.clearVerified(); // and a code accepted in this session doesn't carry over to the next person
     appEl.style.display = "none";
     authScreen.style.display = "flex";
