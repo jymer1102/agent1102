@@ -42,9 +42,11 @@
   <!-- mhchem extension: lets the AI write chemical equations with \ce{...} inside the same math delimiters -->
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/mhchem.min.js" integrity="sha384-ifpG+NlgMq0kvOSGqGQxW1mJKpjjMDmZdpKGq3tbvD3WPhyshCEEYClriK/wRVU0" crossorigin="anonymous"></script>
 
-  <link rel="preload" as="image" href="images/cursor/custom-j-cursor.png" />
-  <link rel="preload" as="image" href="images/cursor/custom-j-cursor-pointer.png" />
-  <link rel="stylesheet" href="style.css?v=20261117b" />
+  <link rel="preload" as="image" href="images/cursor/arrow.cur" />
+  <link rel="preload" as="image" href="images/cursor/pointer.cur" />
+  <link rel="preload" as="image" href="images/cursor/text-select.cur" />
+  <link rel="preload" as="image" href="images/cursor/unavailable.cur" />
+  <link rel="stylesheet" href="style.css?v=20261121a" />
 </head>
 
 <body>
@@ -105,10 +107,12 @@
         </span>
         <span id="settings-name">Account</span>
       </button>
+      <button class="icon-btn" id="admin-btn" title="Admin" aria-label="Open admin tools" aria-haspopup="dialog" hidden><i class="fa-solid fa-user-shield"></i></button>
       <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"><i class="fa-solid fa-moon"></i></button>
     </div>
   </div>
   <div id="overlay"></div>
+  <div id="announcement-bar" class="announcement-bar" role="region" aria-label="Notifications" hidden></div>
   <header>
     <div style="display:flex;gap:0.5rem">
       <button class="icon-btn" id="history-btn" title="Chat history"><i class="fa-solid fa-sidebar-open fa-comment"></i></button>
@@ -188,7 +192,7 @@
             <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
           </div>
           <button type="button" id="save-password" class="modal-btn primary">Change password</button>
-          <p class="field-note">To keep your account safe, I'll email you a 6-digit code to confirm it's you. You only need to enter it once each time you sign in.</p>
+          <p class="field-note">To keep your account safe, I'll email you a code to confirm it's you. You only need to enter it once each time you sign in.</p>
         </div>
 
         <p id="profile-msg" class="settings-msg" role="status" aria-live="polite"></p>
@@ -272,6 +276,23 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="admin-modal">
+  <div class="modal-box settings-box admin-box" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+    <div class="settings-head">
+      <h2 id="admin-title"><i class="fa-solid fa-user-shield"></i> Admin</h2>
+      <button class="icon-btn" id="admin-close" title="Close admin" aria-label="Close admin"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="settings-tabs" role="tablist" aria-label="Admin pages">
+      <button type="button" role="tab" class="settings-tab admin-tab" data-page="overview" aria-selected="true"><i class="fa-solid fa-gauge"></i><span>Overview</span></button>
+      <button type="button" role="tab" class="settings-tab admin-tab" data-page="users" aria-selected="false" tabindex="-1"><i class="fa-solid fa-users"></i><span>Users</span></button>
+      <button type="button" role="tab" class="settings-tab admin-tab" data-page="notify" aria-selected="false" tabindex="-1"><i class="fa-solid fa-bullhorn"></i><span>Notify</span></button>
+      <button type="button" role="tab" class="settings-tab admin-tab" data-page="ask" aria-selected="false" tabindex="-1"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Ask AI</span></button>
+      <button type="button" role="tab" class="settings-tab admin-tab" data-page="activity" aria-selected="false" tabindex="-1"><i class="fa-solid fa-clock-rotate-left"></i><span>Activity</span></button>
+    </div>
+    <div class="settings-body" id="admin-body"></div>
+  </div>
+</div>
+
 <canvas id="backpack-egg-canvas"></canvas>
 <div id="backpack-egg-overlay">
   <div id="backpack-egg-wrap">🎒</div>
@@ -289,16 +310,18 @@
 <script src="js/study.js?v=20261111a"></script>
 <script src="js/stream.js?v=20261029a"></script>
 <script src="js/commands.js?v=20261030a"></script>
-<script src="js/codedialog.js?v=20261115a"></script>
-<script src="js/auth.js?v=20261112a"></script>
+<script src="js/codedialog.js?v=20261120a"></script>
+<script src="js/auth.js?v=20261120a"></script>
 <script src="js/profile.js?v=20261109a"></script>
 <script src="js/settings.js?v=20261112a"></script>
+<script src="js/announcements.js?v=20261120a"></script>
+<script src="js/admin.js?v=20261120a"></script>
 <script src="js/ui.js?v=20261111a"></script>
 <script src="js/sendstate.js?v=20261020a"></script>
-<script src="js/voice-viz.js?v=20261115a"></script>
-<script src="js/chat.js?v=20261114a"></script>
+<script src="js/voice-viz.js?v=20261111a"></script>
+<script src="js/chat.js?v=20261111a"></script>
 <script src="js/tables.js?v=20261029a"></script>
-<script src="js/easter-eggs.js?v=20261030a"></script>
+<script src="js/easter-eggs.js?v=20261120a"></script>
 <script src="js/glow.js?v=20261018d"></script>
 <script src="js/reicon.js?v=20261108a"></script>
 </body>
