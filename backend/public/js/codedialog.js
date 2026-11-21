@@ -1,6 +1,6 @@
 // ============================================================
-//  The 6-digit code window
-//  ONE full-screen window for every code the app asks for from an email: six boxes, one digit each. Used for confirming a new
+//  The emailed-code window
+//  ONE full-screen window for every code the app asks for from an email: one box per digit (6 unless the server says otherwise: GET /auth/config). Used for confirming a new
 //  account, choosing a new password after "Forgot password?", and confirming a password change in Settings.
 //
 //    const r = await agent1102CodeDialog.open({
@@ -15,8 +15,8 @@
 //    // r = { ok: true, result }  the code was accepted        { ok: false }  the person closed the window
 //    //     { ok: false, error }  verify() asked for the window to close because of some other problem
 //
-//  Typing: a digit moves on to the next box; Backspace goes back; paste (or an autofilled code) fills all six; the code is sent as
-//  soon as the sixth digit is in. Escape or the X closes it.
+//  Typing: a digit moves on to the next box; Backspace goes back; paste (or an autofilled code) fills every box; the code is sent as
+//  soon as the last digit is in. Escape or the X closes it.
 //
 //  "Once per session": after a code has been accepted, markVerified() remembers it for this browser tab (verifiedThisSession()),
 //  so the next thing that needs confirming in the same session can skip the window. Signing out forgets it (clearVerified()).
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const LENGTH = 6;
+  let LENGTH = 6; // how many digits the emailed code has; the server's EMAIL_CODE_LENGTH setting decides (see setLength below)
   let defaultCooldownMs = 30000; // how long "Send a new code" is held back after a send (an open() call can set its own)
   const cooldownFor = opts => (opts && opts.cooldownMs != null ? opts.cooldownMs : defaultCooldownMs);
   const VERIFIED_KEY = "agent1102_code_verified";
@@ -265,10 +265,25 @@
     });
   }
 
+  // The number of boxes follows the server (GET /auth/config), which has to match Supabase's "Email OTP Length". A window that is open right now
+  // keeps the length it opened with; the next one is built with the new length.
+  function setLength(n) {
+    n = Math.floor(Number(n));
+    if (!(n >= 6 && n <= 10) || n === LENGTH) return;
+    LENGTH = n;
+    if (root && !active) { root.remove(); root = null; boxes = []; }
+  }
+  if (typeof fetch === "function" && typeof BACKEND_URL === "string") {
+    try {
+      fetch(BACKEND_URL + "/auth/config").then(r => (r && r.ok ? r.json() : null)).then(c => { if (c && c.codeLength) setLength(c.codeLength); }).catch(() => { /* keep 6 */ });
+    } catch (_) { /* keep 6 */ }
+  }
+
   window.agent1102CodeDialog = {
     open, verifiedThisSession, markVerified, clearVerified,
     get isOpen() { return !!active; },
     get length() { return LENGTH; },
+    setLength,
     get cooldownMs() { return defaultCooldownMs; },
     set cooldownMs(ms) { defaultCooldownMs = Math.max(0, Number(ms) || 0); },
     close() { finish({ ok: false }); },
