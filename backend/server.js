@@ -14,6 +14,7 @@ const cors = require("cors");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
 const { createAuth, isBanned } = require("./lib/auth");
+const { isAdmin } = require("./lib/admin");
 const security = require("./lib/security");
 const { createLimiter } = require("./lib/ratelimit");
 const { wrapAsyncRoutes } = require("./lib/asyncwrap");
@@ -201,6 +202,9 @@ const L = {
   title: createLimiter({ windowMs: MIN, max: 30, key: personKey, message: slowDown("Too many requests.") }),
   tts: createLimiter({ windowMs: MIN, max: 60, key: personKey, message: slowDown("Too many read-aloud requests.") }),
   settings: createLimiter({ windowMs: 10 * MIN, max: 30, key: personKey, message: slowDown("You've changed your settings a lot. Please wait a few minutes.") }),
+  // the admin panel: browsing is generous, asking the AI is not (each question is a paid AI call that reads a lot of chat text)
+  admin: createLimiter({ windowMs: MIN, max: 120, key: personKey, message: slowDown("You're using the admin tools very quickly.") }),
+  adminAsk: createLimiter({ windowMs: 10 * MIN, max: 20, key: personKey, message: slowDown("You've asked the AI a lot of questions.") }),
   linkPreview: createLimiter({ windowMs: MIN, max: 90, key: personKey, message: slowDown("Too many link previews.") }),
 };
 app.use(L.everything); // a generous per-address backstop for every API route (the page's own files are served before this)
@@ -251,7 +255,7 @@ const userMeta = createUserMeta({ supabaseAdmin, auth });
 const secretBox = createSecretBox(process.env.KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_KEY);
 const userSettings = createUserSettings({ supabaseAdmin, box: secretBox, ttlMs: Number(process.env.SETTINGS_CACHE_MS) || 60 * 1000 }); // (the cache is cleared whenever the person saves a change; the env variable only lets tests shorten it)
 const ctx = {
-  app, supabase, supabaseAdmin, auth, isBanned, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
+  app, supabase, supabaseAdmin, auth, isBanned, isAdmin, userMeta, userSettings, siteUrl, MSG, fail, UserError, friendlyAuthError, needUser, L,
   TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST, SYSTEM_PROMPT, MATH_VISUALS_GUIDE, ROOT,
 };
 // Requests that call the AI run with the person's own Groq key if they saved one (otherwise the shared key, as before).
@@ -276,6 +280,8 @@ require("./routes/scores")(ctx);
 require("./routes/settings")(ctx);
 require("./routes/authemail")(ctx);
 require("./routes/chats")(ctx);
+require("./routes/admin")(ctx);
+require("./routes/announcements")(ctx);
 
 // --- ERROR HANDLER ---
 app.use((err, req, res, next) => {
