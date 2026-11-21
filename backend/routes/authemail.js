@@ -30,6 +30,8 @@ module.exports = function (ctx) {
 
   // a failed call to Supabase, as a plain-words answer and the right status
   function sendProblem(res, error, fallback) {
+    // always say in the log what Supabase actually answered (never the password or the code), so "it just says it couldn't" can be traced
+    console.warn(`Account change refused by Supabase: status ${error.status}, code ${error.code || "(none)"}, message: ${String(error.message || "").slice(0, 200)}`);
     const status = error.status === 401 || error.status === 403 ? 401 : error.status === 429 ? 429 : error.status >= 500 || error.status === 0 ? 503 : 400;
     const message = status === 401 ? MSG.session
       : status === 503 ? "I couldn't reach the account service just now. Please try again in a moment."
