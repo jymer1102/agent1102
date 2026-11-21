@@ -28,9 +28,9 @@ body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var
 .auth-box h1 { font-size:1.4rem; text-align:center; }
 .auth-box p { font-size:0.85rem; color:var(--text-muted); text-align:center; }
 .auth-box input { padding:0.75rem; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:1rem; font-family:'Inter',sans-serif; width:100%; }
-.auth-box button.primary { padding:0.75rem; border-radius:10px; border:none; background:var(--accent); color:white; font-size:1rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; width:100%; font-family:'Inter',sans-serif; }
+.auth-box button.primary { padding:0.75rem; border-radius:10px; border:none; background:var(--accent); color:white; font-size:1rem; cursor:var(--cur-pointer); width:100%; font-family:'Inter',sans-serif; }
 
-.auth-toggle { background:none; border:none; color:var(--accent); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.9rem; text-align:center; font-family:'Inter',sans-serif; }
+.auth-toggle { background:none; border:none; color:var(--accent); cursor:var(--cur-pointer); font-size:0.9rem; text-align:center; font-family:'Inter',sans-serif; }
 /* (These start with .auth-box on purpose: `.auth-box p` above sets the muted grey and is more specific than a bare .auth-error,
    which is why sign-in errors used to show in grey instead of red.) */
 .auth-box .auth-error { font-size:0.85rem; text-align:center; color:#ff6b6d; }
@@ -39,14 +39,14 @@ body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var
 .light .auth-box .auth-error.info { color:#1e8449; }
 #app { display:none; flex-direction:column; height:100vh; }
 header { padding:0.75rem 1rem; background:var(--surface); display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
-.header-title { font-size:1.1rem; font-weight:600; cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; user-select:none; pointer-events:none; } /* plain text, not clickable */
+.header-title { font-size:1.1rem; font-weight:600; cursor:var(--cur-arrow); user-select:none; pointer-events:none; } /* plain text, not clickable */
 .header-btns { display:flex; gap:0.5rem; }
 .icon-btn {
   background:var(--surface2);
   border:1px solid var(--border);
   color:var(--text);
   border-radius:8px;
-  cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer;
+  cursor:var(--cur-pointer);
   font-size:1rem;
   width:34px;
   height:34px;
@@ -73,52 +73,95 @@ header { padding:0.75rem 1rem; background:var(--surface); display:flex; align-it
 .user .msg { border-bottom-right-radius:4px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .msg img { max-width:100%; border-radius:10px; margin-top:0.5rem; display:block; }
 .msg-actions { display:flex; gap:0.4rem; }
-.msg-action-btn { background:none; border:none; color:var(--text-muted); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.8rem; padding:0.2rem 0.4rem; border-radius:6px; }
+.msg-action-btn { background:none; border:none; color:var(--text-muted); cursor:var(--cur-pointer); font-size:0.8rem; padding:0.2rem 0.4rem; border-radius:6px; }
 .msg-action-btn:hover { background:var(--surface2); color:var(--text); }
 #input-area { position:relative; display:flex; flex-direction:column; padding:1rem; gap:0.5rem; background:var(--surface); border-top:1px solid var(--border); }
 #preview-area { display:none; align-items:center; gap:0.5rem; }
 #preview-area img { height:60px; border-radius:8px; border:1px solid var(--border); }
-#remove-img { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:50%; width:24px; height:24px; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.8rem; }
+#remove-img { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:50%; width:24px; height:24px; cursor:var(--cur-pointer); font-size:0.8rem; }
 #bottom-row { display:flex; gap:0.5rem; }
 textarea { flex:1; padding:0.75rem; border-radius:12px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:1rem; resize:none; height:52px; font-family:'Inter',sans-serif; }
-button { padding:0 1.25rem; border-radius:12px; border:none; background:var(--accent); color:white; font-size:1rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
-button:disabled { opacity:0.5; cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; }
-.tool-btn { background:var(--surface2); border:1px solid var(--border); color:var(--text); font-size:1.2rem; padding:0 0.9rem; border-radius:12px; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
+button { padding:0 1.25rem; border-radius:12px; border:none; background:var(--accent); color:white; font-size:1rem; cursor:var(--cur-pointer); }
+button:disabled { opacity:0.5; cursor:var(--cur-unavailable); }
+.tool-btn { background:var(--surface2); border:1px solid var(--border); color:var(--text); font-size:1.2rem; padding:0 0.9rem; border-radius:12px; cursor:var(--cur-pointer); }
 
 .tool-btn.recording { background:#e03; color:var(--on-danger); border-color:#e03; }
 #sidebar { position:fixed; top:0; left:0; width:280px; height:100%; background:var(--surface); border-right:1px solid var(--border); z-index:100; display:flex; flex-direction:column; transform:translateX(-100%); visibility:hidden; } /* slides in and out: see "Sidebar motion" below */
 #sidebar.open { transform:none; visibility:visible; }
-#clear-all-btn { background:#c0392b; border:none; color:var(--on-danger); border-radius:8px; padding:0.3rem 0.6rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.8rem; white-space:nowrap; }
+#clear-all-btn { background:#c0392b; border:none; color:var(--on-danger); border-radius:8px; padding:0.3rem 0.6rem; cursor:var(--cur-pointer); font-size:0.8rem; white-space:nowrap; }
 
 #sidebar-list { flex:1; overflow-y:auto; padding:0.5rem; }
 .history-item { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
-.history-item-title { flex:1; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; word-break:break-word; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; padding:0.6rem 0.4rem; border-radius:8px; font-size:0.9rem; color:var(--text); }
+.history-item-title { flex:1; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; word-break:break-word; cursor:var(--cur-pointer); padding:0.6rem 0.4rem; border-radius:8px; font-size:0.9rem; color:var(--text); }
 .history-item-title:hover { background:var(--surface2); }
-.delete-chat-btn { background:none; border:none; color:#e74c3c; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.9rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
+.delete-chat-btn { background:none; border:none; color:#e74c3c; cursor:var(--cur-pointer); font-size:0.9rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
 .delete-chat-btn:hover { background:#c0392b; color:var(--on-danger); }
 #overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:99; opacity:0; visibility:hidden; pointer-events:none; } /* fades: see "Sidebar motion" below */
 #overlay.show { opacity:1; visibility:visible; pointer-events:auto; }
 /* ============================================================
-   Default cursor (jymer1102 branding)
-   Why it used to fail in places: this generic rule is the weakest in the file, so any element with its own
-   "cursor:" rule (buttons, cards, disabled buttons, the title...) fell back to the plain system cursor.
-   Fixes:
-    1. every one of those element-specific rules now uses the branded cursor too (see the url(...) values below)
-    2. the rule covers <html>, not just <body>, so gaps around the page are covered
-    3. any-pointer: fine = any device that has a mouse or trackpad, including laptops with touch screens
-    4. children of disabled buttons (the icons) no longer show the pointer hand
-    5. the two images are preloaded in index.html so the first hover isn't the system cursor
-    6. the games (pacman/, trex/) are separate pages, so they carry the same rule
+   Cursors (jymer1102 set, images/cursor/*.cur). One variable per cursor, each with the browser's own cursor as a fallback if a file is missing.
+   The hotspot (the exact pixel that clicks) is stored inside each .cur file.
+
+     file                         CSS cursor it replaces                         used for
+     arrow.cur                    default / auto                                 everything by default
+     pointer.cur                  pointer                                        buttons, links, selects, checkboxes, anything clickable
+     text-select.cur              text                                           typing fields (text, email, password, search, number...) and textareas
+     unavailable.cur              not-allowed / no-drop                          disabled buttons and fields
+     busy.cur                     wait                                           class .cur-busy
+     working-in-background.cur    progress                                       class .cur-working, and anything marked aria-busy="true"
+     precision-select.cur         crosshair                                      class .cur-precision
+     move.cur                     move / all-scroll                              class .cur-move
+     horizontal-resize.cur        ew-resize / col-resize / e-resize / w-resize   class .cur-resize-h
+     vertical-resize.cur          ns-resize / row-resize / n-resize / s-resize   class .cur-resize-v
+     diagonal-resize-1.cur        nwse-resize (top-left <-> bottom-right)        class .cur-resize-nwse
+     diagonal-resize-2.cur        nesw-resize (top-right <-> bottom-left)        class .cur-resize-nesw
+     alternate-select.cur         (no CSS equivalent)                            class .cur-alternate
+     handwriting.cur              (no CSS equivalent)                            class .cur-handwriting
+
+   Why the rules below are ordered the way they are: the first one is the weakest in the file, so every later, more specific rule wins.
+   Also: the rule covers <html> (gaps around the page), uses any-pointer: fine (anything with a mouse or trackpad, including touch laptops),
+   and the files are preloaded in index.html so the first hover isn't the system cursor. The games (pacman/, trex/) are separate pages with their own copy.
    ============================================================ */
+:root {
+  --cur-arrow: url('images/cursor/arrow.cur'), default;
+  --cur-pointer: url('images/cursor/pointer.cur'), pointer;
+  --cur-text: url('images/cursor/text-select.cur'), text;
+  --cur-unavailable: url('images/cursor/unavailable.cur'), not-allowed;
+  --cur-busy: url('images/cursor/busy.cur'), wait;
+  --cur-working: url('images/cursor/working-in-background.cur'), progress;
+  --cur-precision: url('images/cursor/precision-select.cur'), crosshair;
+  --cur-move: url('images/cursor/move.cur'), move;
+  --cur-resize-h: url('images/cursor/horizontal-resize.cur'), ew-resize;
+  --cur-resize-v: url('images/cursor/vertical-resize.cur'), ns-resize;
+  --cur-resize-nwse: url('images/cursor/diagonal-resize-1.cur'), nwse-resize;
+  --cur-resize-nesw: url('images/cursor/diagonal-resize-2.cur'), nesw-resize;
+  --cur-alternate: url('images/cursor/alternate-select.cur'), default;
+  --cur-handwriting: url('images/cursor/handwriting.cur'), crosshair;
+}
 @media (any-pointer: fine) {
-  html, body, body * { cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; }
+  html, body, body * { cursor:var(--cur-arrow); }
   a, a *,
   button, button *,
-  input, select, textarea,
+  select,
+  input[type="checkbox"], input[type="radio"], input[type="range"], input[type="file"], input[type="color"], input[type="submit"], input[type="button"],
   [role="button"], [role="button"] *,
-  .icon-btn, .icon-btn * { cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
+  .icon-btn, .icon-btn * { cursor:var(--cur-pointer); }
+  input:not([type]), input[type="text"], input[type="email"], input[type="password"], input[type="search"], input[type="tel"], input[type="url"], input[type="number"],
+  textarea, [contenteditable=""], [contenteditable="true"] { cursor:var(--cur-text); }
+  [aria-busy="true"], [aria-busy="true"] * { cursor:var(--cur-working); }
+  .cur-busy, .cur-busy * { cursor:var(--cur-busy); }
+  .cur-working, .cur-working * { cursor:var(--cur-working); }
+  .cur-precision, .cur-precision * { cursor:var(--cur-precision); }
+  .cur-move, .cur-move * { cursor:var(--cur-move); }
+  .cur-resize-h, .cur-resize-h * { cursor:var(--cur-resize-h); }
+  .cur-resize-v, .cur-resize-v * { cursor:var(--cur-resize-v); }
+  .cur-resize-nwse, .cur-resize-nwse * { cursor:var(--cur-resize-nwse); }
+  .cur-resize-nesw, .cur-resize-nesw * { cursor:var(--cur-resize-nesw); }
+  .cur-alternate, .cur-alternate * { cursor:var(--cur-alternate); }
+  .cur-handwriting, .cur-handwriting * { cursor:var(--cur-handwriting); }
   button:disabled, button:disabled *,
-  input:disabled, select:disabled, textarea:disabled { cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; }
+  input:disabled, select:disabled, textarea:disabled,
+  [aria-disabled="true"], [aria-disabled="true"] * { cursor:var(--cur-unavailable); }
 }
 
 .cursor { display:inline-block; width:2px; height:1em; background:var(--text); margin-left:2px; animation:blink 0.7s infinite; vertical-align:text-bottom; }
@@ -127,7 +170,7 @@ button:disabled { opacity:0.5; cursor:url('images/cursor/custom-j-cursor.png') 2
 .modal-overlay.open { display:flex; }
 .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:2rem; width:100%; max-width:380px; display:flex; flex-direction:column; gap:1rem; }
 .modal-input { padding:0.75rem; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:1rem; font-family:Inter,sans-serif; width:100%; }
-.modal-btn { padding:0.75rem; border-radius:10px; border:none; font-size:1rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-family:Inter,sans-serif; }
+.modal-btn { padding:0.75rem; border-radius:10px; border:none; font-size:1rem; cursor:var(--cur-pointer); font-family:Inter,sans-serif; }
 
 /* Markdown & Code Block Additions */
 .msg-content-body table { width:100%; min-width:max-content; border-collapse:collapse; margin:0.75rem 0; font-size:0.9rem; }
@@ -164,7 +207,7 @@ header { border-bottom:1px solid var(--border); }
 .history-item-title:hover { background:var(--surface2); }
 .glass-btn {
   display:inline-flex; align-items:center; justify-content:center; gap:0.4rem;
-  padding:0.55rem 1rem; border-radius:12px; font-size:0.9rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer;
+  padding:0.55rem 1rem; border-radius:12px; font-size:0.9rem; cursor:var(--cur-pointer);
   background:var(--surface2); border:1px solid var(--border); color:var(--text);
 }
 .agent1102-glass-panel { background:transparent; }
@@ -374,7 +417,7 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
   padding:0.25rem 0.6rem!important; font-size:0.78rem!important; border-radius:8px!important;
   background:rgba(127,127,127,0.18)!important; color:inherit!important;
   border:1px solid rgba(127,127,127,0.28)!important; box-shadow:none!important;
-  display:inline-flex; align-items:center; gap:0.35rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; line-height:1.2;
+  display:inline-flex; align-items:center; gap:0.35rem; cursor:var(--cur-pointer); line-height:1.2;
 }
 .code-btn:hover, .light .code-btn:hover { background:rgba(127,127,127,0.32)!important; }
 .code-btn.copied, .code-btn.copied i { color:#2ecc71!important; }
@@ -440,32 +483,28 @@ header:hover, #input-area:hover, #sidebar:hover { border-color:var(--border-hove
    ============================================================ */
 
 /* Keep bars clear of phone notches / home indicator (needs viewport-fit=cover in index.html) */
-/* The bar's padding is the original 0.75rem above and below. (On a phone with a notch the top gap goes UNDER the notch area, so the title isn't squeezed against it.) */
-header { padding:calc(env(safe-area-inset-top, 0px) + 0.75rem) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left)); }
+header { padding:max(0.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left)); }
 #input-area { padding:1rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
 #chat { padding-left:max(1rem, env(safe-area-inset-left)); padding-right:max(1rem, env(safe-area-inset-right)); }
 
 /* ============================================================
-   Header: one row that fits its buttons evenly
-   The bar hugs the buttons: the same space above and below them (the original 0.75rem), and the buttons keep their own size (34px, 30px on a
-   phone). The title is sized from the buttons too (its line is exactly as tall as a button) so everything in the bar is centered on the same line.
-   Left: history. Middle: the title. Right: the extra buttons. The two side columns are always equal, so the title stays exactly centered and can
-   never run into a button; on a very narrow phone the title gets smaller (it never needs more room than what is left between the side columns).
+   Header: the title sits on its own line above the buttons (all screen sizes)
+   Row 1: title, centered. Its click box is only as wide as the title itself
+          (justify-self:center shrinks it to the letters).
+   Row 2: history/new-chat on the left, everything else on the right.
+   Easter-egg buttons are added to the right group, so it wraps if a tiny
+   screen can't fit them all.
    ============================================================ */
 header {
-  --btn:34px; /* the buttons' size, unchanged */
-  display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; column-gap:0.5rem;
+  display:grid; grid-template-columns:auto 1fr; grid-template-areas:"title title" "left right";
+  align-items:center; row-gap:0.4rem; column-gap:0.5rem;
 }
-header .header-title {
-  grid-column:2; grid-row:1; justify-self:center; align-self:center; max-width:100%; white-space:nowrap; padding:0 0.12em;
-  line-height:var(--btn); /* as tall as a button, so the letters sit on the buttons' centre line */
-  font-size:min(calc(var(--btn) * 0.82), max(1.25rem, calc((100vw - 251px) / 5.04))); /* 251px = the room the history button and 3 extra buttons need, plus a little spare (the title is 5.04 x its font size wide) */
-}
-header > div:not(.header-btns) { grid-column:1; grid-row:1; justify-self:start; }
-header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wrap; justify-content:flex-end; align-content:center; }
+header .header-title { grid-area:title; justify-self:center; max-width:100%; white-space:nowrap; }
+header > div:not(.header-btns) { grid-area:left; }
+header .header-btns { grid-area:right; justify-self:end; flex-wrap:wrap; justify-content:flex-end; }
 
 @media (max-width:480px) {
-  header { --btn:30px; column-gap:0.4rem; }
+  header { column-gap:0.4rem; }
   header .icon-btn { width:30px!important; height:30px!important; }
   header .header-btns, header > div:not(.header-btns) { gap:0.35rem!important; }
 }
@@ -476,7 +515,7 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
 .math-inline { color:inherit; }
 .math-display { display:block; margin:0.9rem 0; overflow-x:auto; overflow-y:hidden; padding:0.15rem 0; color:inherit; }
 .math-display .katex-display { margin:0; }
-.math-error { color:#ff6b6d; cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; border-bottom:1px dotted currentColor; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; }
+.math-error { color:#ff6b6d; cursor:var(--cur-arrow); border-bottom:1px dotted currentColor; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; }
 .light .math-error { color:#c0282a; }
 
 /* ============================================================
@@ -514,7 +553,7 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
   max-width:560px; max-height:min(340px,50vh); overflow-y:auto; flex-direction:column; gap:2px; padding:0.35rem;
   background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,0.35);
 }
-.cmd-item { display:flex; align-items:center; gap:0.7rem; width:100%; padding:0.5rem 0.6rem; border:none; border-radius:10px; background:transparent; color:var(--text); text-align:left; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-family:'Inter',sans-serif; }
+.cmd-item { display:flex; align-items:center; gap:0.7rem; width:100%; padding:0.5rem 0.6rem; border:none; border-radius:10px; background:transparent; color:var(--text); text-align:left; cursor:var(--cur-pointer); font-family:'Inter',sans-serif; }
 .cmd-item.active, .cmd-item:hover { background:var(--surface2); }
 .cmd-icon { width:1.6rem; text-align:center; color:var(--accent); font-size:1rem; flex-shrink:0; }
 .cmd-text { display:flex; flex-direction:column; min-width:0; }
@@ -535,15 +574,15 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
 .study-bar { height:5px; border-radius:99px; background:var(--card-inset); overflow:hidden; margin-bottom:0.9rem; }
 .study-bar-fill { height:100%; width:0; background:var(--accent); border-radius:99px; transition:width 0.3s ease; }
 .study-actions { display:flex; gap:0.5rem; flex-wrap:wrap; justify-content:center; margin-top:0.8rem; }
-.study-btn { display:inline-flex; align-items:center; gap:0.4rem; padding:0.5rem 0.9rem; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--text); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.9rem; font-family:'Inter',sans-serif; }
+.study-btn { display:inline-flex; align-items:center; gap:0.4rem; padding:0.5rem 0.9rem; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--text); cursor:var(--cur-pointer); font-size:0.9rem; font-family:'Inter',sans-serif; }
 .study-btn:hover { filter:brightness(1.12); }
 .study-btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 
 .quiz-question { font-size:1.05rem; font-weight:500; line-height:1.45; margin-bottom:0.8rem; }
 .quiz-options { display:flex; flex-direction:column; gap:0.5rem; }
-.quiz-option { display:flex; align-items:flex-start; gap:0.7rem; width:100%; padding:0.65rem 0.75rem; border-radius:12px; border:1px solid var(--border); background:var(--surface2); color:var(--text); text-align:left; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.95rem; font-family:'Inter',sans-serif; line-height:1.4; }
+.quiz-option { display:flex; align-items:flex-start; gap:0.7rem; width:100%; padding:0.65rem 0.75rem; border-radius:12px; border:1px solid var(--border); background:var(--surface2); color:var(--text); text-align:left; cursor:var(--cur-pointer); font-size:0.95rem; font-family:'Inter',sans-serif; line-height:1.4; }
 .quiz-option:not(:disabled):hover { border-color:var(--accent); }
-.quiz-option:disabled { cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto; }
+.quiz-option:disabled { cursor:var(--cur-unavailable); }
 .quiz-letter { flex-shrink:0; width:1.5rem; height:1.5rem; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:0.78rem; font-weight:600; background:var(--card-bg); border:1px solid var(--card-border); }
 .quiz-option.correct { border-color:#2ecc71; background:color-mix(in srgb, #2ecc71 16%, var(--surface2)); }
 .quiz-option.correct .quiz-letter { background:#2ecc71; color:#fff; }
@@ -558,7 +597,7 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
 .quiz-score { font-size:2.2rem; font-weight:700; }
 .quiz-score-label { color:var(--text-muted); margin-top:0.2rem; }
 
-.flashcard { display:block; width:100%; height:200px; padding:0; border:none; background:none; perspective:1000px; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
+.flashcard { display:block; width:100%; height:200px; padding:0; border:none; background:none; perspective:1000px; cursor:var(--cur-pointer); }
 .flashcard-inner { position:relative; width:100%; height:100%; transition:transform 0.45s; transform-style:preserve-3d; }
 .flashcard.flipped .flashcard-inner { transform:rotateY(180deg); }
 .flashcard-face { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.5rem; padding:1rem 1.2rem; text-align:center; border-radius:14px; border:1px solid var(--card-border); background:var(--card-inset); color:var(--text); backface-visibility:hidden; -webkit-backface-visibility:hidden; overflow:auto; }
@@ -613,15 +652,15 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
    PASSWORD FIELDS: show / hide eye button + sign-in form layout
    ============================================================ */
 .auth-form { display:flex; flex-direction:column; gap:1rem; }
-.auth-stay { display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:var(--text-muted); cursor:pointer; user-select:none; }
-.auth-box .auth-stay input { width:auto; padding:0; margin:0; accent-color:var(--accent); cursor:pointer; }
+.auth-stay { display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:var(--text-muted); cursor:var(--cur-pointer); user-select:none; }
+.auth-box .auth-stay input { width:auto; padding:0; margin:0; accent-color:var(--accent); cursor:var(--cur-pointer); }
 .pw-wrap { position:relative; display:flex; width:100%; }
 .auth-box .pw-wrap input, .modal-box .pw-wrap input { padding-right:2.9rem; }
 .pw-toggle {
   position:absolute; top:50%; right:0.4rem; transform:translateY(-50%);
   width:2.2rem; height:2.2rem; display:flex; align-items:center; justify-content:center;
   background:transparent; border:none; border-radius:8px; padding:0;
-  color:var(--text-muted); font-size:1rem; cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer;
+  color:var(--text-muted); font-size:1rem; cursor:var(--cur-pointer);
 }
 .pw-toggle:hover, .pw-toggle:focus-visible { color:var(--accent-bright); outline:none; box-shadow:none; }
 
@@ -668,7 +707,7 @@ header .header-btns { grid-column:3; grid-row:1; justify-self:end; flex-wrap:wra
 #bottom-row #send:not(.send-ready),
 #bottom-row #send:not(.send-ready):hover {
   background:var(--surface2); color:var(--text-muted); border-color:transparent; box-shadow:none; opacity:0.7;
-  cursor:url('images/cursor/custom-j-cursor.png') 2 2, auto;
+  cursor:var(--cur-arrow);
 }
 #bottom-row #send.send-ready { background:var(--accent); color:#fff; box-shadow:0 0 16px var(--accent-glow); }
 
@@ -693,7 +732,7 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 }
 
 /* Rename chat (pencil in the sidebar + the inline name box) */
-.rename-chat-btn { background:none; border:none; color:var(--text-muted); cursor:url('images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; font-size:0.85rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
+.rename-chat-btn { background:none; border:none; color:var(--text-muted); cursor:var(--cur-pointer); font-size:0.85rem; padding:0.3rem 0.5rem; border-radius:6px; flex-shrink:0; }
 .rename-chat-btn:hover { background:var(--surface2); color:var(--accent-bright); }
 .history-item-input {
   flex:1; min-width:0; padding:0.5rem 0.6rem; border-radius:8px; font-size:0.9rem;
@@ -839,7 +878,7 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 
 /* AI page */
 .settings-details { border:1px solid var(--border); border-radius:12px; background:var(--surface2); }
-.settings-details > summary { display:flex; align-items:center; gap:0.5rem; padding:0.75rem 0.9rem; font-weight:600; font-size:0.92rem; cursor:pointer; list-style:none; }
+.settings-details > summary { display:flex; align-items:center; gap:0.5rem; padding:0.75rem 0.9rem; font-weight:600; font-size:0.92rem; cursor:var(--cur-pointer); list-style:none; }
 .settings-details > summary::-webkit-details-marker { display:none; }
 .settings-details > summary::after { content:"\25BE"; margin-left:auto; color:var(--text-muted); transition:transform 0.2s; }
 .settings-details[open] > summary::after { transform:rotate(180deg); }
@@ -927,7 +966,7 @@ header[data-touch-glow], #input-area[data-touch-glow], #sidebar[data-touch-glow]
 #bottom-row.listening #mic-viz { display:flex; }
 #bottom-row.listening #input { display:none; }
 .mic-viz-bar {
-  flex:1 1 0; max-width:5px; min-width:2px; height:28px; border-radius:3px; /* the bars spread to fill the box, up to 5px each */
+  flex:0 1 3px; min-width:2px; height:28px; border-radius:3px;
   background:linear-gradient(to top, var(--accent), var(--accent-bright));
   transform:scaleY(0.1); transform-origin:center; will-change:transform;
 }
@@ -985,9 +1024,62 @@ body.code-dialog-open { overflow:hidden; }
 .code-dialog-info { margin:0; color:var(--text-muted); font-size:0.88rem; }
 .code-dialog-info:empty { display:none; }
 .code-dialog-verify { width:100%; max-width:20rem; }
-.code-dialog-verify:disabled { cursor:not-allowed; }
+.code-dialog-verify:disabled { cursor:var(--cur-unavailable); }
 .code-dialog-note { margin:0; color:var(--text-muted); font-size:0.82rem; line-height:1.5; }
 @media (max-width:420px) {
   .code-boxes { gap:0.4rem; }
   .code-digit { width:2.6rem; height:3.4rem; font-size:1.5rem; }
 }
+
+/* ============================================================
+   Code window: one box per digit, any length (6 to 10): the boxes share the width instead of having a fixed one
+   ============================================================ */
+.code-boxes { width:100%; }
+.code-digit { flex:1 1 0; min-width:0; width:auto; max-width:3.2rem; }
+@media (max-width:420px) { .code-digit { width:auto; max-width:2.6rem; } }
+
+/* ============================================================
+   Notifications from the site owner (js/announcements.js): a bar above the header, each message with an x
+   ============================================================ */
+.announcement-bar { display:flex; flex-direction:column; flex:0 0 auto; position:relative; z-index:5; }
+.announcement-bar[hidden] { display:none; }
+.announcement { display:flex; align-items:center; gap:0.65rem; padding:0.6rem 0.9rem; padding-top:calc(0.6rem + env(safe-area-inset-top, 0px));
+  background:var(--accent); color:#fff; font-size:0.92rem; line-height:1.4; border-bottom:1px solid rgba(255,255,255,0.18); }
+.announcement + .announcement { padding-top:0.6rem; }
+.announcement-icon { flex:0 0 auto; opacity:0.9; }
+.announcement-text { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+.announcement .announcement-x { flex:0 0 auto; width:30px; height:30px; padding:0; border-radius:8px; background:rgba(255,255,255,0.16); border:none; color:#fff; font-size:0.95rem; display:flex; align-items:center; justify-content:center; }
+.announcement .announcement-x:hover { background:rgba(255,255,255,0.3); }
+.icon-btn[hidden] { display:none !important; }
+
+/* ============================================================
+   Admin window (js/admin.js). Reuses the Settings window's frame, tabs and fields; these are the extras.
+   ============================================================ */
+.admin-box { max-width:720px; }
+.admin-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.45rem; }
+.admin-row { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; width:100%; padding:0.65rem 0.8rem; border-radius:12px; border:1px solid var(--card-border); background:var(--card-bg); color:var(--text); text-align:left; font-size:0.92rem; }
+button.admin-row { cursor:var(--cur-pointer); }
+button.admin-row:hover { border-color:var(--accent-bright); }
+.admin-row-main { display:flex; flex-direction:column; gap:0.15rem; min-width:0; flex:1 1 auto; overflow-wrap:anywhere; }
+.admin-row .modal-btn { flex:0 0 auto; padding:0.5rem 0.9rem; font-size:0.9rem; }
+.admin-ok { color:#2ecc71; }
+.admin-bad { color:#f5a623; }
+.admin-badge { display:inline-block; margin-left:0.35rem; padding:0.05rem 0.5rem; border-radius:999px; font-size:0.72rem; font-weight:600; vertical-align:middle; border:1px solid currentColor; }
+.admin-badge.suspended { color:#f5a623; }
+.admin-badge.banned { color:#ff6b6d; }
+.light .admin-badge.suspended { color:#a8650b; }
+.light .admin-badge.banned { color:#c0282a; }
+.admin-facts { display:grid; grid-template-columns:max-content 1fr; gap:0.35rem 1rem; margin:0; font-size:0.92rem; }
+.admin-facts dt { color:var(--text-muted); }
+.admin-facts dd { margin:0; overflow-wrap:anywhere; }
+.admin-facts code { font-size:0.82rem; }
+.admin-back { align-self:flex-start; padding:0.5rem 0.9rem; font-size:0.9rem; }
+.admin-box select.modal-input { flex:0 1 11rem; }
+.admin-box input[type="number"].modal-input { flex:0 1 6rem; }
+.admin-answer { white-space:pre-wrap; overflow-wrap:anywhere; padding:0.9rem 1rem; border-radius:12px; border:1px solid var(--card-border); background:var(--card-bg); font-size:0.95rem; line-height:1.55; }
+.admin-chat-log { display:flex; flex-direction:column; gap:0.6rem; }
+.admin-msg { padding:0.65rem 0.8rem; border-radius:12px; border:1px solid var(--card-border); background:var(--card-bg); }
+.admin-msg.user { border-color:var(--accent); }
+.admin-msg-who { display:block; font-size:0.72rem; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-muted); margin-bottom:0.2rem; }
+.admin-msg-text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:0.92rem; line-height:1.5; }
+@media (max-width:600px) { .admin-box { max-width:none; max-height:none; height:100%; border-radius:0; } .admin-facts { grid-template-columns:1fr; } .admin-facts dd { margin-bottom:0.3rem; } }
