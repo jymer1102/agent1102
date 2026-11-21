@@ -3,7 +3,7 @@
 //   POST /auth/resend          send the sign-up confirmation email again
 //   POST /auth/email/change    Supabase emails a confirmation link to the NEW address (and the old one, if "Secure email change" is on);
 //                              the address only changes once the link is opened
-//   POST /auth/verify-code     the 6-digit code from a sign-up or reset email (when the email template includes the code): signs the person in
+//   POST /auth/verify-code     the emailed code (6 digits unless EMAIL_CODE_LENGTH says otherwise) from a sign-up or reset email (when the email template includes the code): signs the person in
 //   POST /auth/password/code   Supabase emails a 6-digit code to the person's current address
 //   POST /auth/password        set the new password, with that code (or straight after opening a reset-password link)
 // Everything signed-in is done with the PERSON'S OWN token (lib/gotrue.js), so Supabase decides what is allowed and what must be
@@ -14,10 +14,14 @@ const { asUser, looksLikeEmail, maskEmail } = require("../lib/gotrue");
 module.exports = function (ctx) {
   const { app, supabase, supabaseAdmin, auth, isBanned, needUser, MSG, friendlyAuthError, L, siteUrl } = ctx;
 
-  // Every emailed code in the app is 6 digits. (How many digits Supabase puts in the email is its own setting: Authentication ->
-  // Sign In / Providers -> Email -> "Email OTP Length". It has to be 6 there too, or a code can never be typed in.)
-  const CODE_RE = /^\d{6}$/;
-  const CODE_SHAPE = "The code is 6 digits. Please type the 6-digit code from the email.";
+  // How many digits the emailed codes have: 6 unless EMAIL_CODE_LENGTH says otherwise (6 to 10). How many digits Supabase puts in
+  // the email is its own setting: Authentication -> Sign In / Providers -> Email -> "Email OTP Length". The two have to match, or a
+  // code can never be typed in (new Supabase projects send 8 digits by default). The page asks for this number (GET /auth/config)
+  // and draws that many boxes.
+  const CODE_LENGTH = (() => { const n = Number(process.env.EMAIL_CODE_LENGTH); return Number.isInteger(n) && n >= 6 && n <= 10 ? n : 6; })();
+  const CODE_RE = new RegExp(`^\\d{${CODE_LENGTH}}$`);
+  const CODE_SHAPE = `The code is ${CODE_LENGTH} digits. Please type the ${CODE_LENGTH}-digit code from the email.`;
+  app.get("/auth/config", (req, res) => { res.set("Cache-Control", "no-store"); res.json({ codeLength: CODE_LENGTH }); });
   const CODE_WRONG = "That code isn't right, or it has expired. Check your newest email, or ask for a new code.";
 
   const callback = () => `${siteUrl()}/auth/callback`;
