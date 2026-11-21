@@ -44,8 +44,9 @@
     <style>
       /* same branded cursor as the main app (these pages open in their own tab) */
       @media (any-pointer: fine) {
-        html, body, body * { cursor:url('/images/cursor/custom-j-cursor.png') 2 2, auto; }
-        a, a *, button, button * { cursor:url('/images/cursor/custom-j-cursor-pointer.png') 6 2, pointer; }
+        html, body, body * { cursor:url('/images/cursor/arrow.cur'), default; }
+        a, a *, button, button * { cursor:url('/images/cursor/pointer.cur'), pointer; }
+        button:disabled, button:disabled * { cursor:url('/images/cursor/unavailable.cur'), not-allowed; }
       }
     </style>
 </head>
