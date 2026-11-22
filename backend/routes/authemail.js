@@ -29,17 +29,19 @@ module.exports = function (ctx) {
   const LINK_SENT = "If there's an account for that email, I've sent it a message. It can take a minute, and it may land in your spam folder.";
 
   // a failed call to Supabase, as a plain-words answer and the right status
-  function sendProblem(res, error, fallback) {
+  function sendProblem(res, error, fallback, { showReason = false } = {}) {
     // always say in the log what Supabase actually answered (never the password or the code), so "it just says it couldn't" can be traced
     console.warn(`Account change refused by Supabase: status ${error.status}, code ${error.code || "(none)"}, message: ${String(error.message || "").slice(0, 200)}`);
     const status = error.status === 401 || error.status === 403 ? 401 : error.status === 429 ? 429 : error.status >= 500 || error.status === 0 ? 503 : 400;
     const message = status === 401 ? MSG.session
       : status === 503 ? "I couldn't reach the account service just now. Please try again in a moment."
       : friendlyAuthError(error, fallback);
+    // showReason: when there is no plain-words version of Supabase's answer, say what it was (only used on the signed-in password change, where the person is looking at their own account)
+    const reason = showReason && status === 400 && message === fallback && error.message ? String(error.message).replace(/\s+/g, " ").trim().slice(0, 200) : "";
     // badCode: the problem is the code itself (wrong, or expired), so the code window stays open for another try.
     // needsCode: Supabase wants a fresh code first.
     const badCode = error.code === "reauthentication_not_valid" || error.code === "otp_expired" || /nonce|token has expired or is invalid|otp.*expired/i.test(error.message || "");
-    return res.status(status).json({ error: message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}), ...(badCode ? { badCode: true } : {}) });
+    return res.status(status).json({ error: reason ? `I couldn't change your password. Supabase said: ${reason}` : message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}), ...(badCode ? { badCode: true } : {}) });
   }
 
   const tokenOf = req => auth.bearer(req);
@@ -137,7 +139,7 @@ module.exports = function (ctx) {
     if (nonce && !CODE_RE.test(nonce)) return res.status(400).json({ error: CODE_SHAPE });
 
     const r = await asUser(tokenOf(req), "PUT", "/user", { body: { password, ...(nonce ? { nonce } : {}) } });
-    if (!r.ok) return sendProblem(res, r.error, "I couldn't change your password. Please try again.");
+    if (!r.ok) return sendProblem(res, r.error, "I couldn't change your password. Please try again.", { showReason: true });
     auth.invalidate(req.user.id);
     // a new password should end every OTHER signed-in session (a thief's, or an old phone); this one stays
     Promise.resolve().then(() => supabaseAdmin.auth.admin.signOut(tokenOf(req), "others")).catch(e => console.warn("Signing out other sessions failed:", e.message));
