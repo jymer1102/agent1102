@@ -133,6 +133,8 @@
       overlay.style.whiteSpace = isInput ? "pre" : "pre-wrap";
       overlay.style.display = isInput ? "flex" : "block";
       overlay.style.alignItems = isInput ? "center" : "";
+      // a flex row ignores text-align, so line the copy up by hand: boxes with centred text (the verification code) get a centred glow
+      overlay.style.justifyContent = !isInput ? "" : cs.textAlign === "center" ? "center" : (cs.textAlign === "right" || cs.textAlign === "end") ? "flex-end" : "";
       inner.style.whiteSpace = isInput ? "pre" : "pre-wrap";
       inner.style.flex = isInput ? "none" : "";
       last.geo = geo; last.style = styleKey;
