@@ -259,6 +259,7 @@
       const res = await postJson("/auth/password", { password, confirmPassword }, rec.a);
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) { sessionStorage.removeItem("agent1102_recovery"); setMode("forgot"); setAuthMessage(LINK_EXPIRED); resetAuthButton(); return; }
+      if (data.needsCurrentPassword) { setAuthMessage("I can't reset a password I don't know the current one for right now. Please contact the site owner for help."); resetAuthButton(); return; }
       if (!res.ok || data.error) { setAuthMessage(data.error || "I couldn't change your password. Please try again."); resetAuthButton(); return; }
       sessionStorage.removeItem("agent1102_recovery");
       agent1102Session.begin(true);
