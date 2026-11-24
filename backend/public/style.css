@@ -1085,5 +1085,5 @@ button.admin-row:hover { border-color:var(--accent-bright); }
 .admin-msg-text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:0.92rem; line-height:1.5; }
 @media (max-width:600px) { .admin-box { max-width:none; max-height:none; height:100%; border-radius:0; } .admin-facts { grid-template-columns:1fr; } .admin-facts dd { margin-bottom:0.3rem; } }
 
-/* Header title: as tall as the button row under it, so the two rows read as one bar. Shrinks only if a very narrow screen needs it. */
-header .header-title { font-size:clamp(1.5rem, 8vw, 2.25rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+/* Header title: a little larger than the button row under it (30px buttons on phones), so the two rows sit together as one bar. Scales down on narrower screens. */
+header .header-title { font-size:clamp(1.3rem, 6.6vw, 1.9rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
