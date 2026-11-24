@@ -114,6 +114,8 @@ function friendlyAuthError(error, fallback) {
     const min = /at least (\d+) characters/i.exec(text);
     return min ? `Your password needs to be at least ${min[1]} characters.` : "That password is too weak. Please choose a longer one.";
   }
+  if (code === "current_password_required" || has(/current password required/i)) return "Please type your current password too.";
+  if (code === "current_password_mismatch" || has(/current password (is )?(incorrect|wrong|invalid|does not match)/i)) return "That current password isn't right. Please try again.";
   if (code === "same_password" || has(/different from the old password/i)) return "Your new password must be different from your current one.";
   if (code === "reauthentication_needed" || has(/requires reauthentication/i)) return "For your security I need to email you a confirmation code first. Tap \"Send confirmation code\", then enter the code.";
   if (code === "reauthentication_not_valid" || code === "otp_expired" || has(/nonce|token has expired or is invalid|otp.*expired/i)) return "That code isn't right, or it has expired. Check your newest email, or ask for a new code.";
