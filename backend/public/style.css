@@ -1087,3 +1087,8 @@ button.admin-row:hover { border-color:var(--accent-bright); }
 
 /* Header title: a little larger than the button row under it (30px buttons on phones), so the two rows sit together as one bar. Scales down on narrower screens. */
 header .header-title { font-size:clamp(1.3rem, 6.6vw, 1.9rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+
+/* Header bar: tight and even. The same space above the title as below the buttons, and a small gap between the two rows. */
+header { padding-top:max(0.5rem, env(safe-area-inset-top)); padding-bottom:0.5rem; row-gap:0.3rem; }
+/* the title's line box has some empty space above the letters (about 0.14em); pull it up so the gap above the letters matches the gap below the buttons */
+header .header-title { padding-bottom:0; margin-top:-0.14em; }
