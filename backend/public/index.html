@@ -183,6 +183,10 @@
 
         <div class="field">
           <label for="profile-password">Password</label>
+          <div class="pw-wrap" id="profile-password-current-wrap" hidden>
+            <input type="password" id="profile-password-current" class="modal-input" autocomplete="current-password" placeholder="Current password" aria-label="Current password" />
+            <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
+          </div>
           <div class="pw-wrap">
             <input type="password" id="profile-password" class="modal-input" autocomplete="new-password" placeholder="New password" />
             <button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false" title="Show password"><i class="fa-solid fa-eye"></i></button>
