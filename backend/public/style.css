@@ -1096,3 +1096,6 @@ button.admin-row:hover { border-color:var(--accent-bright); }
 .admin-msg-who { display:block; font-size:0.72rem; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-muted); margin-bottom:0.2rem; }
 .admin-msg-text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:0.92rem; line-height:1.5; }
 @media (max-width:600px) { .admin-box { max-width:none; max-height:none; height:100%; border-radius:0; } .admin-facts { grid-template-columns:1fr; } .admin-facts dd { margin-bottom:0.3rem; } }
+
+/* Header title: sized to the header (the buttons under it are ~36px tall), shrinking on narrow screens and never spilling out of the bar */
+header .header-title { font-size:clamp(1.25rem, 4.6vw, 1.75rem); line-height:1.25; padding-bottom:0.05em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
