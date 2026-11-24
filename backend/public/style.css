@@ -1038,18 +1038,6 @@ body.code-dialog-open { overflow:hidden; }
 .code-digit { flex:1 1 0; min-width:0; width:auto; max-width:3.2rem; }
 @media (max-width:420px) { .code-digit { width:auto; max-width:2.6rem; } }
 
-/* The caret in each box is drawn by the box's wrapper (.code-cell), so it is always exactly centered, whatever the browser does with its
-   own. It blinks while the box is focused and empty; a box that holds a digit shows the digit highlighted instead. */
-.code-boxes .code-cell { position:relative; display:block; flex:1 1 0; min-width:0; max-width:3.2rem; }
-.code-boxes .code-cell .code-digit { display:block; width:100%; max-width:none; box-sizing:border-box; padding:0; text-indent:0; text-align:center; caret-color:transparent !important; }
-.code-cell::after { content:""; position:absolute; left:50%; top:50%; width:2px; height:1.9rem; margin-left:-1px; transform:translateY(-50%); border-radius:1px;
-  background:var(--accent-bright); opacity:0; pointer-events:none; }
-.code-cell:focus-within:not(.has-value)::after { opacity:1; animation:code-caret-blink 1.05s steps(1, end) infinite; }
-@keyframes code-caret-blink { 0%, 100% { opacity:1; } 50% { opacity:0; } }
-@media (max-width:420px) { .code-boxes .code-cell { max-width:2.6rem; } .code-cell::after { height:1.6rem; } }
-@media (prefers-reduced-motion: reduce) { .code-cell:focus-within:not(.has-value)::after { animation:none; } }
-/* the new "Current password" box in Settings stays out of sight until Supabase asks for it */
-.pw-wrap[hidden] { display:none; }
 
 /* ============================================================
    Notifications from the site owner (js/announcements.js): a bar above the header, each message with an x
@@ -1097,5 +1085,5 @@ button.admin-row:hover { border-color:var(--accent-bright); }
 .admin-msg-text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:0.92rem; line-height:1.5; }
 @media (max-width:600px) { .admin-box { max-width:none; max-height:none; height:100%; border-radius:0; } .admin-facts { grid-template-columns:1fr; } .admin-facts dd { margin-bottom:0.3rem; } }
 
-/* Header title: sized to the header (the buttons under it are ~36px tall), shrinking on narrow screens and never spilling out of the bar */
-header .header-title { font-size:clamp(1.25rem, 4.6vw, 1.75rem); line-height:1.25; padding-bottom:0.05em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+/* Header title: as tall as the button row under it, so the two rows read as one bar. Shrinks only if a very narrow screen needs it. */
+header .header-title { font-size:clamp(1.5rem, 8vw, 2.25rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
