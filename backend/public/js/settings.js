@@ -31,6 +31,7 @@
       const err = new Error(data.error || GENERIC);
       err.status = res.status;
       err.needsCode = !!data.needsCode; // Supabase wants a fresh emailed code before it will change the password
+      err.needsCurrentPassword = !!data.needsCurrentPassword; // Supabase also wants the old password (or the one typed was wrong)
       err.badCode = !!data.badCode;     // the code that was typed is wrong or has expired
       throw err;
     }
@@ -54,7 +55,8 @@
 
   // empties the password boxes
   function resetPasswordForm() {
-    for (const id of ["profile-password", "profile-password-confirm"]) $(id).value = "";
+    for (const id of ["profile-password", "profile-password-confirm", "profile-password-current"]) $(id).value = "";
+    $("profile-password-current-wrap").hidden = true; // only shown again if Supabase asks for the current password
     hidePasswords();
   }
 
@@ -173,6 +175,16 @@
     return true;
   }
   const sendPasswordCode = () => api("POST", "/auth/password/code");
+  // Some Supabase projects also want the OLD password to change it ("Require current password when updating"). The box for it stays
+  // hidden until Supabase asks; once it is showing, what is typed in it goes along with every password change.
+  const currentPassword = () => $("profile-password-current").value;
+  const currentPasswordShowing = () => !$("profile-password-current-wrap").hidden;
+  const passwordBody = extra => ({ password: newPassword(), confirmPassword: newPasswordAgain(), ...(currentPassword() ? { currentPassword: currentPassword() } : {}), ...extra });
+  function askForCurrentPassword(wasWrong) {
+    $("profile-password-current-wrap").hidden = false;
+    $("profile-password-current").focus();
+    say(profileMsg, wasWrong ? "That current password isn't right. Please try again." : "Please type your current password too, then press Change password again.", "err");
+  }
   const passwordChanged = () => {
     resetPasswordForm();
     say(profileMsg, "Password changed. Your other devices were signed out.", "ok");
@@ -180,14 +192,16 @@
 
   $("save-password").addEventListener("click", () => busy($("save-password"), async () => {
     if (!checkNewPassword()) return;
+    if (currentPasswordShowing() && !currentPassword()) { say(profileMsg, "Type your current password first.", "err"); $("profile-password-current").focus(); return; }
     say(profileMsg, "");
 
     // already confirmed with a code in this session: just try. Supabase has the last word, and asks for a fresh code if it wants one.
     if (codeDialog.verifiedThisSession()) {
       try {
-        await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain() });
+        await api("POST", "/auth/password", passwordBody());
         return passwordChanged();
       } catch (e) {
+        if (e.needsCurrentPassword) return askForCurrentPassword(!!currentPassword());
         if (!e.needsCode) return say(profileMsg, e.message, "err");
         codeDialog.clearVerified();
       }
@@ -203,11 +217,12 @@
       // the code and the new password go together. A wrong code keeps the window open for another try; anything else (a password that's
       // too weak, say) closes it, and the reason shows here.
       verify: async code => {
-        try { return await api("POST", "/auth/password", { password: newPassword(), confirmPassword: newPasswordAgain(), code }); }
+        try { return await api("POST", "/auth/password", passwordBody({ code })); }
         catch (e) { if (!e.badCode) e.closeDialog = true; throw e; }
       },
     });
     if (outcome.ok) { codeDialog.markVerified(); return passwordChanged(); }
+    if (outcome.error && outcome.error.needsCurrentPassword) return askForCurrentPassword(!!currentPassword());
     if (outcome.error) return say(profileMsg, outcome.error.message, "err");
     say(profileMsg, "Your password wasn't changed.");
   }));
