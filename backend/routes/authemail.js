@@ -5,7 +5,8 @@
 //                              the address only changes once the link is opened
 //   POST /auth/verify-code     the emailed code (6 digits unless EMAIL_CODE_LENGTH says otherwise) from a sign-up or reset email (when the email template includes the code): signs the person in
 //   POST /auth/password/code   Supabase emails a 6-digit code to the person's current address
-//   POST /auth/password        set the new password, with that code (or straight after opening a reset-password link)
+//   POST /auth/password        set the new password, with that code (or straight after opening a reset-password link). If Supabase is set to
+//                              "Require current password when updating", the old password goes along too (currentPassword)
 // Everything signed-in is done with the PERSON'S OWN token (lib/gotrue.js), so Supabase decides what is allowed and what must be
 // confirmed. The service key is never used to change an email or password.
 "use strict";
@@ -40,8 +41,10 @@ module.exports = function (ctx) {
     const reason = showReason && status === 400 && message === fallback && error.message ? String(error.message).replace(/\s+/g, " ").trim().slice(0, 200) : "";
     // badCode: the problem is the code itself (wrong, or expired), so the code window stays open for another try.
     // needsCode: Supabase wants a fresh code first.
+    // needsCurrentPassword: the project is set to "Require current password when updating", so Supabase also wants the old password
+    const needsCurrentPassword = error.code === "current_password_required" || error.code === "current_password_mismatch" || /current password/i.test(error.message || "");
     const badCode = error.code === "reauthentication_not_valid" || error.code === "otp_expired" || /nonce|token has expired or is invalid|otp.*expired/i.test(error.message || "");
-    return res.status(status).json({ error: reason ? `I couldn't change your password. Supabase said: ${reason}` : message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}), ...(badCode ? { badCode: true } : {}) });
+    return res.status(status).json({ error: reason ? `I couldn't change your password. Supabase said: ${reason}` : message, ...(error.code === "reauthentication_needed" ? { needsCode: true } : {}), ...(needsCurrentPassword ? { needsCurrentPassword: true } : {}), ...(badCode ? { badCode: true } : {}) });
   }
 
   const tokenOf = req => auth.bearer(req);
@@ -130,15 +133,16 @@ module.exports = function (ctx) {
   });
 
   app.post("/auth/password", needUser, L.codeTries, async (req, res) => {
-    const { password, confirmPassword, code } = req.body || {};
+    const { password, confirmPassword, code, currentPassword } = req.body || {};
     if (typeof password !== "string" || !password) return res.status(400).json({ error: "Please type your new password." });
     if (password.length > 128) return res.status(400).json({ error: "That password is too long." });
     if (confirmPassword != null && confirmPassword !== password) return res.status(400).json({ error: "The two passwords don't match. Please type them again." });
     if (code != null && typeof code !== "string") return res.status(400).json({ error: CODE_SHAPE });
+    if (currentPassword != null && (typeof currentPassword !== "string" || currentPassword.length > 128)) return res.status(400).json({ error: "That current password doesn't look right." });
     const nonce = String(code || "").replace(/\s+/g, "");
     if (nonce && !CODE_RE.test(nonce)) return res.status(400).json({ error: CODE_SHAPE });
 
-    const r = await asUser(tokenOf(req), "PUT", "/user", { body: { password, ...(nonce ? { nonce } : {}) } });
+    const r = await asUser(tokenOf(req), "PUT", "/user", { body: { password, ...(nonce ? { nonce } : {}), ...(currentPassword ? { current_password: currentPassword } : {}) } });
     if (!r.ok) return sendProblem(res, r.error, "I couldn't change your password. Please try again.", { showReason: true });
     auth.invalidate(req.user.id);
     // a new password should end every OTHER signed-in session (a thief's, or an old phone); this one stays
