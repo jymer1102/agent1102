@@ -2,7 +2,7 @@
 // That is what makes Supabase itself send the emails and apply its own rules for the sensitive changes:
 //   PUT /user   {email}               -> confirmation email(s) before the address changes   ("Confirm email" / "Secure email change")
 //   GET /reauthenticate               -> a 6-digit code emailed to the person               ("Secure password change")
-//   PUT /user   {password, nonce}     -> the new password, with that code
+//   PUT /user   {password, nonce}     -> the new password, with that code (plus current_password if the project requires it)
 // (The old way, the admin API, changed email and password instantly with no confirmation at all.)
 "use strict";
 
