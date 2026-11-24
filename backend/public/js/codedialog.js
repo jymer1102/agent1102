@@ -89,13 +89,19 @@
       b.addEventListener("input", () => onInput(i));
       b.addEventListener("keydown", e => onKey(i, e));
       b.addEventListener("focus", () => b.select());
+      b.addEventListener("mouseup", e => e.preventDefault()); // a click would drop the selection and park the caret beside the digit instead of leaving it centered
       b.addEventListener("paste", e => {
         const text = (e.clipboardData || window.clipboardData || { getData: () => "" }).getData("text");
         if (!/\d/.test(text)) return; // nothing usable: let the browser do what it does
         e.preventDefault();
         fill(String(text).replace(/\D/g, "").length >= LENGTH ? 0 : i, text);
       });
-      boxesEl.appendChild(b);
+      // Each box sits in a little wrapper that draws the blinking caret itself, dead centre (the browser's own caret is hidden in CSS: it
+      // drifts to the side of a digit once there is one, and some browsers don't centre it in an empty box)
+      const cell = document.createElement("span");
+      cell.className = "code-cell";
+      cell.appendChild(b);
+      boxesEl.appendChild(cell);
       boxes.push(b);
     }
 
@@ -109,7 +115,7 @@
   const code = () => boxes.map(b => b.value).join("");
   const focusBox = i => { const b = boxes[Math.max(0, Math.min(LENGTH - 1, i))]; if (b) { b.focus(); b.select(); } };
   function refreshLook() {
-    boxes.forEach(b => b.classList.toggle("filled", b.value !== ""));
+    boxes.forEach(b => { b.classList.toggle("filled", b.value !== ""); b.parentNode.classList.toggle("has-value", b.value !== ""); });
     verifyBtn.disabled = !!(active && active.busy) || code().length < LENGTH;
   }
   function clearBoxes() { boxes.forEach(b => { b.value = ""; }); refreshLook(); }
