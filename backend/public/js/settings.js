@@ -56,7 +56,7 @@
   // empties the password boxes
   function resetPasswordForm() {
     for (const id of ["profile-password", "profile-password-confirm", "profile-password-current"]) $(id).value = "";
-    $("profile-password-current-wrap").hidden = true; // only shown again if Supabase asks for the current password
+    currentNeeded = false;
     hidePasswords();
   }
 
@@ -175,13 +175,15 @@
     return true;
   }
   const sendPasswordCode = () => api("POST", "/auth/password/code");
-  // Some Supabase projects also want the OLD password to change it ("Require current password when updating"). The box for it stays
-  // hidden until Supabase asks; once it is showing, what is typed in it goes along with every password change.
+  // Some Supabase projects also want the OLD password to change it ("Require current password when updating"). The box is always there;
+  // whatever is typed in it goes along with every password change, and once Supabase has asked for it, it can't be left empty.
   const currentPassword = () => $("profile-password-current").value;
-  const currentPasswordShowing = () => !$("profile-password-current-wrap").hidden;
+  let currentNeeded = false; // set once Supabase has asked for it, after which it can't be left empty
+  const currentPasswordShowing = () => currentNeeded;
   const passwordBody = extra => ({ password: newPassword(), confirmPassword: newPasswordAgain(), ...(currentPassword() ? { currentPassword: currentPassword() } : {}), ...extra });
   function askForCurrentPassword(wasWrong) {
-    $("profile-password-current-wrap").hidden = false;
+    currentNeeded = true;
+    $("profile-password-current").scrollIntoView({ block: "center", behavior: "smooth" });
     $("profile-password-current").focus();
     say(profileMsg, wasWrong ? "That current password isn't right. Please try again." : "Please type your current password too, then press Change password again.", "err");
   }
