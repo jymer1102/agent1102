@@ -2099,7 +2099,7 @@
             const token = localStorage.getItem("agent1102_token");
 
             if (token) {
-                const BACKEND_URL = "https://agent1102.onrender.com";
+                const BACKEND_URL = "https://agent1102.jymer1102.com";
 
                 fetch(`${BACKEND_URL}/trex-score`, {
                     method: 'POST',
