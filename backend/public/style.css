@@ -1086,9 +1086,13 @@ button.admin-row:hover { border-color:var(--accent-bright); }
 @media (max-width:600px) { .admin-box { max-width:none; max-height:none; height:100%; border-radius:0; } .admin-facts { grid-template-columns:1fr; } .admin-facts dd { margin-bottom:0.3rem; } }
 
 /* Header title: a little larger than the button row under it (30px buttons on phones), so the two rows sit together as one bar. Scales down on narrower screens. */
-header .header-title { font-size:clamp(1.3rem, 6.6vw, 1.9rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+header .header-title { font-size:clamp(1.15rem, 5.4vw, 1.5rem); line-height:1.1; padding-bottom:0.08em; min-width:0; overflow:hidden; text-overflow:ellipsis; }
 
-/* Header bar: tight and even. The same space above the title as below the buttons, and a small gap between the two rows. */
-header { padding-top:max(0.5rem, env(safe-area-inset-top)); padding-bottom:0.5rem; row-gap:0.3rem; }
-/* the title's line box has some empty space above the letters (about 0.14em); pull it up so the gap above the letters matches the gap below the buttons */
-header .header-title { padding-bottom:0; margin-top:-0.14em; }
+/* Header bar: ONE row. Sidebar button on the left, title dead centre, game buttons on the right, with the same space above and below. */
+header {
+  grid-template-columns:1fr auto 1fr; grid-template-areas:"left title right";
+  align-items:center; row-gap:0; column-gap:0.5rem;
+  padding-top:max(0.5rem, env(safe-area-inset-top)); padding-bottom:0.5rem;
+}
+header .header-title { grid-area:title; justify-self:center; margin:0; padding:0; line-height:1.1; }
+header .header-btns { flex-wrap:nowrap; }
