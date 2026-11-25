@@ -251,7 +251,7 @@ const { TEXT_MODEL, VISION_MODEL, MAX_IMAGES_PER_REQUEST } = require("./lib/mode
 const { SYSTEM_PROMPT, MATH_VISUALS_GUIDE } = require("./lib/system-prompt");
 // This site's own address (SITE_URL may hold several comma-separated ones: the first is the main one). Every link in the emails
 // Supabase sends (confirm sign-up, reset password, confirm email change) is told to come back to <this>/auth/callback.
-const siteUrl = () => String(process.env.SITE_URL || "https://agent1102.onrender.com").split(",")[0].trim().replace(/\/+$/, "");
+const siteUrl = () => String(process.env.SITE_URL || "https://agent1102.jymer1102.com").split(",")[0].trim().replace(/\/+$/, "");
 const userMeta = createUserMeta({ supabaseAdmin, auth });
 // People can store their own Groq key. It is encrypted with a key derived from KEY_ENCRYPTION_SECRET, or else from the service key.
 const secretBox = createSecretBox(process.env.KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_KEY);
@@ -307,7 +307,7 @@ const server = app.listen(PORT, () => console.log(`Server running on port ${PORT
 // Only the FIRST address of SITE_URL is used (it may be a comma-separated list), the ping has a timeout, and it
 // stays off on a laptop or in tests unless SITE_URL is set, so a local run never pokes the live site.
 const firstOrigin = v => String(v || "").split(",")[0].trim().replace(/\/+$/, "");
-const SELF_URL = process.env.SELF_PING === "off" ? "" : firstOrigin(process.env.RENDER_EXTERNAL_URL || process.env.SITE_URL || (process.env.RENDER ? "https://agent1102.onrender.com" : ""));
+const SELF_URL = process.env.SELF_PING === "off" ? "" : firstOrigin(process.env.RENDER_EXTERNAL_URL || process.env.SITE_URL || (process.env.RENDER ? "https://agent1102.jymer1102.com" : ""));
 function selfPing() {
   fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) })
     .then((res) => console.log(`Self-ping OK (${res.status})`))
