@@ -23,9 +23,10 @@ function parseOrigins(...values) {
   return out;
 }
 
-// Sites allowed to call the API from a browser: this site itself, plus anything listed in ALLOWED_ORIGINS
+// Sites allowed to call the API from a browser: this site itself, plus anything listed in ALLOWED_ORIGINS.
+// The old Render address stays on the list so it keeps working next to the custom domain.
 function siteOrigins(env = process.env) {
-  return parseOrigins(env.SITE_URL, "https://agent1102.onrender.com", env.ALLOWED_ORIGINS);
+  return parseOrigins(env.SITE_URL, "https://agent1102.jymer1102.com", "https://agent1102.onrender.com", env.ALLOWED_ORIGINS);
 }
 
 // Requests with no Origin header (same-site page loads, curl, the keep-alive ping) are always fine.
