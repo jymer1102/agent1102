@@ -11124,7 +11124,7 @@ var submitScoreToagent1102 = function(score) {
     var token;
     try { token = localStorage.getItem("agent1102_token"); } catch (e) { return; }
     if (!token || practiceMode || !(score > 0)) return;
-    var BACKEND_URL = "https://agent1102.onrender.com";
+    var BACKEND_URL = "https://agent1102.jymer1102.com";
     fetch(BACKEND_URL + "/pacman-score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
