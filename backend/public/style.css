@@ -107,8 +107,8 @@ button:disabled { opacity:0.5; cursor:var(--cur-unavailable); }
      pointer.cur                  pointer                                        buttons, links, selects, checkboxes, anything clickable
      text-select.cur              text                                           typing fields (text, email, password, search, number...) and textareas
      unavailable.cur              not-allowed / no-drop                          disabled buttons and fields
-     busy.cur                     wait                                           class .cur-busy
-     working-in-background.cur    progress                                       class .cur-working, and anything marked aria-busy="true"
+     busy.cur                     wait                                           class .cur-busy; sign-in box while "Loading..."; code box while "Checking..."
+     working-in-background.cur    progress                                       class .cur-working, anything marked aria-busy="true" (the chat while the AI is answering, js/cursorstate.js)
      precision-select.cur         crosshair                                      class .cur-precision
      move.cur                     move / all-scroll                              class .cur-move
      horizontal-resize.cur        ew-resize / col-resize / e-resize / w-resize   class .cur-resize-h
@@ -162,6 +162,12 @@ button:disabled { opacity:0.5; cursor:var(--cur-unavailable); }
   button:disabled, button:disabled *,
   input:disabled, select:disabled, textarea:disabled,
   [aria-disabled="true"], [aria-disabled="true"] * { cursor:var(--cur-unavailable); }
+  /* The hourglass wins over everything inside it, disabled buttons and fields included (a screen that is waiting shows it everywhere).
+     Used by: the sign-in box while "Loading..." (no JS needed: the button is disabled exactly then), and the verification-code box
+     while it says "Checking..." (js/codedialog.js adds .cur-busy). */
+  .cur-busy, .cur-busy *, .cur-busy button:disabled, .cur-busy button:disabled *, .cur-busy input:disabled { cursor:var(--cur-busy); }
+  /* its own rule: a browser too old to know :has() skips just this one, instead of dropping the line above with it */
+  .auth-box:has(#auth-submit:disabled), .auth-box:has(#auth-submit:disabled) *, .auth-box:has(#auth-submit:disabled) button:disabled * { cursor:var(--cur-busy); }
 }
 
 .cursor { display:inline-block; width:2px; height:1em; background:var(--text); margin-left:2px; animation:blink 0.7s infinite; vertical-align:text-bottom; }
@@ -1096,3 +1102,13 @@ header {
 }
 header .header-title { grid-area:title; justify-self:center; margin:0; padding:0; line-height:1.1; }
 header .header-btns { flex-wrap:nowrap; }
+
+/* Resizable Settings text boxes (kept at the very end so it beats the `resize:vertical` set earlier for .settings-box textarea): with a mouse the browser's own drag corner is replaced by js/resizegrip.js (its cursor can't be changed in CSS),
+   so draw a small grip there ourselves. Touch-only screens keep the browser's corner. */
+@media (any-pointer: fine) {
+  .settings-box textarea {
+    resize:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M11 4 4 11M11 8 8 11' stroke='%238b93a7' stroke-width='1.4' stroke-linecap='round' fill='none'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 5px bottom 5px; background-size:12px 12px;
+  }
+}
