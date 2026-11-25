@@ -62,7 +62,7 @@ async function viaCommons(query, max, signal) {
     prop: "imageinfo", iiprop: "url|mime", iiurlwidth: "640",
   });
   const r = await fetch(`${COMMONS_URL()}?${params}`, {
-    headers: { "Accept": "application/json", "User-Agent": `agent1102-image-search/1.0 (${process.env.SITE_URL || "https://agent1102.onrender.com"})` },
+    headers: { "Accept": "application/json", "User-Agent": `agent1102-image-search/1.0 (${process.env.SITE_URL || "https://agent1102.jymer1102.com"})` },
     signal,
   });
   if (!r.ok) throw new Error(`Commons ${r.status}`);
