@@ -122,6 +122,7 @@
   const setInfo = text => { infoEl.textContent = text || ""; };
   function setBusy(on) {
     if (active) active.busy = on;
+    root.classList.toggle("cur-busy", on); // hourglass cursor while the code is being checked (see style.css)
     boxes.forEach(b => { b.disabled = on; });
     cancelBtn.disabled = closeBtn.disabled = on;
     verifyBtn.textContent = on ? "Checking..." : "Confirm";
@@ -233,6 +234,7 @@
     active = null;
     clearInterval(a.timer);
     root.hidden = true;
+    root.classList.remove("cur-busy");
     document.body.classList.remove("code-dialog-open");
     clearBoxes(); setError(""); setInfo("");
     boxes.forEach(b => { b.disabled = false; });
