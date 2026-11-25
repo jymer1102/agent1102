@@ -205,9 +205,9 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
 
   console.log("security settings");
   const sec = require("../lib/security");
-  const origins = sec.parseOrigins("https://agent1102.onrender.com/x?y=1, https://mine.example , not a url");
+  const origins = sec.parseOrigins("https://agent1102.jymer1102.com/x?y=1, https://mine.example , not a url");
   await t("origins are cleaned up to scheme + host and junk is ignored", () => {
-    assert.deepStrictEqual([...origins], ["https://agent1102.onrender.com", "https://mine.example"]);
+    assert.deepStrictEqual([...origins], ["https://agent1102.jymer1102.com", "https://mine.example"]);
   });
   await t("CORS: our own sites, localhost and no-Origin requests are allowed; other websites are not", async () => {
     const ask = o => new Promise(resolve => sec.corsOptions(origins).origin(o, (e, ok) => resolve(ok)));
@@ -215,7 +215,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert.strictEqual(await ask("http://localhost:3000"), true);
     assert.strictEqual(await ask(undefined), true);
     assert.strictEqual(await ask("https://evil.example"), false);
-    assert.strictEqual(await ask("https://agent1102.onrender.com.evil.example"), false);
+    assert.strictEqual(await ask("https://agent1102.jymer1102.com.evil.example"), false);
   });
   await t("the page policy: scripts only from us + jsDelivr, no inline scripts or handlers, no plugins", () => {
     const csp = sec.appCsp(origins);
@@ -224,7 +224,7 @@ async function t(name, fn) { try { await fn(); passed++; console.log("  ok   " +
     assert(!/unsafe-inline|unsafe-eval/.test(dir("script-src")));
     assert.strictEqual(dir("script-src-attr"), "script-src-attr 'none'");
     assert(/object-src 'none'/.test(csp) && /frame-ancestors 'self'/.test(csp) && /base-uri 'self'/.test(csp));
-    assert(/connect-src 'self' https:\/\/agent1102\.onrender\.com https:\/\/mine\.example/.test(csp), dir("connect-src"));
+    assert(/connect-src 'self' https:\/\/agent1102\.jymer1102\.com https:\/\/mine\.example/.test(csp), dir("connect-src"));
   });
   await t("the code-preview page gets its own, looser policy that is still sandboxed", () => {
     assert(/'unsafe-inline'/.test(sec.PREVIEW_CSP) && /sandbox allow-scripts/.test(sec.PREVIEW_CSP));
