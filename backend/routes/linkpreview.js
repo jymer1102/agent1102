@@ -13,8 +13,8 @@ const LINK_PREVIEW_FAIL_TTL = 5 * 60 * 1000; // a page that couldn't be read get
 const linkPreviewCache = new Map();
 // Sites that block bots: show a good card anyway.
 const KNOWN_PREVIEWS = {
-  "jymer1102.com": { title: "jymer1102", description: "jymer1102's personal website.", image: "/images/favicon/social-card.png", siteName: "jymer1102.com" },
-  "linktr.ee": { title: "jymer1102 | Linktree", description: "All of jymer1102's links in one place.", image: "/images/favicon/social-card.png", siteName: "Linktree" },
+  "jymer1102.com": { title: "jymer1102", description: "jymer1102's personal website.", image: "/images/favicon/social-preview.png", siteName: "jymer1102.com" },
+  "linktr.ee": { title: "jymer1102 | Linktree", description: "All of jymer1102's links in one place.", image: "/images/favicon/social-preview.png", siteName: "Linktree" },
 };
 
 async function fetchPageHtml(startUrl) {
@@ -87,7 +87,7 @@ app.get("/link-preview", needUser, L.linkPreview, async (req, res) => {
   }
   const known = KNOWN_PREVIEWS[host];
   if (known && (host !== "linktr.ee" || /^\/jymer1102\/?$/i.test(u.pathname)) && (host !== "jymer1102.github.io" || /^\/jymer1102\/?$/i.test(u.pathname) || u.pathname === "/") && (host !== "jymer1102.com" || u.pathname === "/" || u.pathname === "")) {
-    data = { title: data.title || known.title, description: data.description || known.description, image: data.image || known.image, siteName: data.siteName || known.siteName };
+    data = { title: data.title || known.title, description: data.description || known.description, image: data.image || known.image, fallbackImage: known.image, siteName: data.siteName || known.siteName };
   }
   linkPreviewCache.set(key, { at: Date.now(), data, failed });
   if (linkPreviewCache.size > 500) linkPreviewCache.delete(linkPreviewCache.keys().next().value);
