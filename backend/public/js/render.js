@@ -832,17 +832,22 @@
       if (info.title) title.textContent = info.title;
       if (info.siteName) host.textContent = info.siteName === hostname ? hostname : `${info.siteName} · ${hostname}`;
       if (info.description) desc.textContent = info.description;
-      if (info.image) {
-        // Load through an <img> first so a broken image never leaves an empty box.
+      // Load through an <img> first so a broken image never leaves an empty box. If the site's own picture
+      // can't be loaded, the next one in the list (the built-in banner for known sites) is tried.
+      const pictures = [info.image, info.fallbackImage].filter((src, i, all) => src && all.indexOf(src) === i);
+      const tryPicture = i => {
+        if (i >= pictures.length) return;
         const probe = new Image();
         probe.referrerPolicy = "no-referrer";
         probe.onload = () => {
-          image.style.backgroundImage = `url("${info.image.replace(/"/g, "%22")}")`;
+          image.style.backgroundImage = `url("${pictures[i].replace(/"/g, "%22")}")`;
           card.classList.add("has-image");
           scrollChat();
         };
-        probe.src = info.image;
-      }
+        probe.onerror = () => tryPicture(i + 1);
+        probe.src = pictures[i];
+      };
+      tryPicture(0);
     });
     return card;
   }
