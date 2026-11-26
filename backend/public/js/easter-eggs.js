@@ -61,7 +61,7 @@
   const dinoBtn = document.createElement("button");
   dinoBtn.className = "icon-btn"; dinoBtn.title = "Play Dino Game"; dinoBtn.innerHTML = '<img src="images/dino.png" alt="Dino game">'; dinoBtn.style.display = dinoUnlocked ? "block" : "none";
   headerBtns.prepend(dinoBtn);
-  function toggleDino() { window.open("/trex/index.html", "_blank"); }
+  function toggleDino() { window.open("/trex", "_blank"); }
   dinoBtn.addEventListener("click", toggleDino);
 
   // Easter egg — PAC-MAN GAME (NEW)
@@ -69,7 +69,7 @@
   const pacmanBtn = document.createElement("button");
   pacmanBtn.className = "icon-btn"; pacmanBtn.title = "Play Pac-Man Game"; pacmanBtn.innerHTML = '<img src="images/pacman.png" alt="Pac-Man game">'; pacmanBtn.style.display = pacmanUnlocked ? "block" : "none";
   headerBtns.prepend(pacmanBtn);
-  function togglePacman() { window.open("/pacman/index.html", "_blank"); }
+  function togglePacman() { window.open("/pacman", "_blank"); }
   pacmanBtn.addEventListener("click", togglePacman);
 
   // --- Saving progress ---
