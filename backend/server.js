@@ -36,6 +36,19 @@ app.use(security.securityHeaders(siteOrigins));
 app.use(cors(security.corsOptions(siteOrigins)));
 // Sign-in, account and settings requests are tiny: a small limit stops anyone posting megabytes at them
 app.use(["/auth/signup", "/auth/login", "/auth/refresh", "/auth/update", "/auth/delete", "/prefs", "/memory", "/settings"], express.json({ limit: "20kb" }));
+// The games live at /trex and /pacman: no trailing slash, no index.html. The old endings redirect to the clean address.
+// (Each game page has a <base href="/game/"> so its sounds, fonts and scripts still load from the folder.)
+for (const game of ["trex", "pacman"]) {
+  const clean = (req, res) => {
+    const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+    res.redirect(301, `/${game}${qs}`);
+  };
+  app.get(`/${game}/index.html`, clean);
+  app.get(`/${game}`, (req, res, next) => {
+    if (req.path.endsWith("/")) return clean(req, res); // /trex/ -> /trex
+    res.set("Cache-Control", "no-cache").sendFile(path.join(__dirname, "public", game, "index.html"), err => err && next(err));
+  });
+}
 // html/js/css are re-checked on every load so a redeploy is picked up right away (no stale scripts)
 app.use(express.static(path.join(__dirname, "public"), {
   setHeaders: (res, filePath) => { if (/\.(html|js|css)$/i.test(filePath)) res.setHeader("Cache-Control", "no-cache"); },
