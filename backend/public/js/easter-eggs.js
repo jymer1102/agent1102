@@ -59,7 +59,7 @@
   // Easter egg — dino game
   let dinoUnlocked = localStorage.getItem("agent1102_dino") === "true";
   const dinoBtn = document.createElement("button");
-  dinoBtn.className = "icon-btn"; dinoBtn.title = "Play Dino Game"; dinoBtn.innerHTML = '<img src="images/dino.png" alt="Dino game">'; dinoBtn.style.display = dinoUnlocked ? "block" : "none";
+  dinoBtn.className = "icon-btn"; dinoBtn.title = "Play Dino Game"; dinoBtn.innerHTML = '<img class="game-icon dino" src="images/dino.png" alt="Dino game">'; dinoBtn.style.display = dinoUnlocked ? "flex" : "none";
   headerBtns.prepend(dinoBtn);
   function toggleDino() { window.open("/trex", "_blank"); }
   dinoBtn.addEventListener("click", toggleDino);
@@ -67,7 +67,7 @@
   // Easter egg — PAC-MAN GAME (NEW)
   let pacmanUnlocked = localStorage.getItem("agent1102_pacman") === "true";
   const pacmanBtn = document.createElement("button");
-  pacmanBtn.className = "icon-btn"; pacmanBtn.title = "Play Pac-Man Game"; pacmanBtn.innerHTML = '<img src="images/pacman.png" alt="Pac-Man game">'; pacmanBtn.style.display = pacmanUnlocked ? "block" : "none";
+  pacmanBtn.className = "icon-btn"; pacmanBtn.title = "Play Pac-Man Game"; pacmanBtn.innerHTML = '<img class="game-icon pacman" src="images/pacman.png" alt="Pac-Man game">'; pacmanBtn.style.display = pacmanUnlocked ? "flex" : "none";
   headerBtns.prepend(pacmanBtn);
   function togglePacman() { window.open("/pacman", "_blank"); }
   pacmanBtn.addEventListener("click", togglePacman);
@@ -90,8 +90,8 @@
 
   function applyEggUI() {
     easterBtn.style.display = easterUnlocked ? "flex" : "none";
-    dinoBtn.style.display = dinoUnlocked ? "block" : "none";
-    pacmanBtn.style.display = pacmanUnlocked ? "block" : "none";
+    dinoBtn.style.display = dinoUnlocked ? "flex" : "none";
+    pacmanBtn.style.display = pacmanUnlocked ? "flex" : "none";
     applyEaster();
   }
 
@@ -152,7 +152,7 @@
     input.value = ""; 
     dinoUnlocked = true; 
     localStorage.setItem("agent1102_dino","true"); 
-    dinoBtn.style.display = "block"; 
+    dinoBtn.style.display = "flex"; 
     pushEggs(); 
     showToast("Dino game unlocked! Click the T-Rex button anytime to play!"); 
   }
@@ -161,7 +161,7 @@
     input.value = ""; 
     pacmanUnlocked = true; 
     localStorage.setItem("agent1102_pacman","true"); 
-    pacmanBtn.style.display = "block"; 
+    pacmanBtn.style.display = "flex"; 
     pushEggs(); 
     showToast("Pac-Man game unlocked! Click the Pac-Man button anytime to play!"); 
   }
